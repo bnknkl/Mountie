@@ -1,0 +1,8 @@
+## Interface: 110002
+## Title: Mountie
+## Notes: Custom mount pack management addon
+## Author: Khazryl
+## Version: 1.0.0
+## SavedVariables: MountieDB
+
+Mountie.lua
