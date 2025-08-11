@@ -1,8 +1,15 @@
-## Interface: 110002
+## Interface: 100107
 ## Title: Mountie
-## Notes: Custom mount pack management addon
-## Author: Khazryl
+## Notes: Create and manage mount sets for different zones, expansions, and transmogs
+## Author: YourName
 ## Version: 1.0.0
 ## SavedVariables: MountieDB
+## Bindings: Bindings.xml
 
-Mountie.lua
+Utils.lua
+Core.lua
+UI/Dialogs.lua
+UI/MainFrame.lua
+UI/MountList.lua
+UI/RulesDialog.lua
+UI/PackPanel.lua
