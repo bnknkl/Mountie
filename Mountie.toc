@@ -9,7 +9,7 @@
 Utils.lua
 Core.lua
 UI/Dialogs.lua
-UI/MainFrame.lua
 UI/MountList.lua
-UI/RulesDialog.lua
+UI/MainFrame.lua
 UI/PackPanel.lua
+UI/RulesDialog.lua

@@ -363,80 +363,40 @@ function MountieUI.CreatePackMountFrame(packFrame, mountID, index)
     end)
     
     removeButton:SetScript("OnClick", function(self)
-        Mountie.Debug("Remove button clicked for mount ID: " .. mountID)
-        
         local success, message = Mountie.RemoveMountFromPack(packFrame.pack.name, mountID)
-        Mountie.Print(message)
-        
+        print(message)
         if success then
-            Mountie.Debug("Mount removed successfully, updating UI in-place")
-            
-            -- Get the updated pack data
-            local updatedPack = Mountie.GetPack(packFrame.pack.name)
-            if updatedPack then
-                Mountie.Debug("Updated pack has " .. #updatedPack.mounts .. " mounts remaining")
-                
-                packFrame.pack = updatedPack -- Update the pack reference
-                
-                -- Remove this specific mount frame
-                mountFrame:Hide()
-                mountFrame:SetParent(nil)
-                
-                -- Remove from the mount frames list
-                for i, frame in ipairs(packFrame.mountFrames) do
-                    if frame == mountFrame then
-                        table.remove(packFrame.mountFrames, i)
-                        Mountie.Debug("Removed mount frame from list, " .. #packFrame.mountFrames .. " frames remaining")
-                        break
-                    end
-                end
-                
-                -- Reposition remaining mount frames
-                for i, frame in ipairs(packFrame.mountFrames) do
-                    frame:ClearAllPoints()
-                    if i == 1 then
-                        frame:SetPoint("TOPLEFT", packFrame.infoText, "BOTTOMLEFT", 8, -2)
-                    else
-                        frame:SetPoint("TOPLEFT", packFrame.mountFrames[i-1], "BOTTOMLEFT", 0, -1)
-                    end
-                end
-                
-                -- Update pack height
-                local baseHeight = 60
-                local newHeight
-                if #updatedPack.mounts > 0 then
-                    local mountsHeight = #updatedPack.mounts * 29 + 10
-                    newHeight = baseHeight + mountsHeight
-                    Mountie.Debug("Calculated new height: " .. newHeight)
-                end
+            -- Refresh the entire pack panel to rebuild the layout cleanly
+            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                _G.MountieMainFrame.packPanel.refreshPacks()
             end
         end
     end)
-        
-        -- Mount tooltip and subtle hover effects
-        mountFrame:EnableMouse(true)
-        mountFrame:SetScript("OnEnter", function(self)
-            -- Brighten the background on hover
-            bg:SetColorTexture(0.1, 0.1, 0.2, 0.7)
-            mountName:SetTextColor(1, 1, 1, 1)
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            if spellID then
-                GameTooltip:SetMountBySpellID(spellID)
-            else
-                GameTooltip:SetText(name or "Unknown Mount", 1, 1, 1)
-            end
-            GameTooltip:Show()
-        end)
-        
-        mountFrame:SetScript("OnLeave", function(self)
-            -- Back to normal background
-            bg:SetColorTexture(0.05, 0.05, 0.15, 0.6)
-            mountName:SetTextColor(0.9, 0.9, 0.9, 1)
-            GameTooltip:Hide()
-        end)
-        
-        return mountFrame
-    end
+    
+    -- Mount tooltip and subtle hover effects
+    mountFrame:EnableMouse(true)
+    mountFrame:SetScript("OnEnter", function(self)
+        -- Brighten the background on hover
+        bg:SetColorTexture(0.1, 0.1, 0.2, 0.7)
+        mountName:SetTextColor(1, 1, 1, 1)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        if spellID then
+            GameTooltip:SetMountBySpellID(spellID)
+        else
+            GameTooltip:SetText(name or "Unknown Mount", 1, 1, 1)
+        end
+        GameTooltip:Show()
+    end)
+    
+    mountFrame:SetScript("OnLeave", function(self)
+        -- Back to normal background
+        bg:SetColorTexture(0.05, 0.05, 0.15, 0.6)
+        mountName:SetTextColor(0.9, 0.9, 0.9, 1)
+        GameTooltip:Hide()
+    end)
+    
+    return mountFrame
+end
 
 -- Pack Visibility Functions
 function MountieUI.HideOtherPackFrames(expandedFrame)

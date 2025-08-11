@@ -33,6 +33,10 @@ local function RebuildRulesList(container, pack)
             local mi = C_Map.GetMapInfo(rule.mapID)
             local zoneName = mi and mi.name or ("MapID " .. tostring(rule.mapID))
             text:SetText(string.format("Zone: %s%s", zoneName, rule.includeParents and " (match parents)" or ""))
+        elseif rule.type == "transmog" then
+            local setInfo = Mountie.GetTransmogSetInfo(rule.setID)
+            local setName = setInfo and setInfo.name or ("SetID " .. tostring(rule.setID))
+            text:SetText("Transmog: " .. setName)
         else
             text:SetText("Unknown rule type")
         end
@@ -45,6 +49,10 @@ local function RebuildRulesList(container, pack)
             if Mountie.TableRemoveByIndex(pack.conditions, i) then
                 Mountie.Print("Removed rule.")
                 RebuildRulesList(container, pack)
+                -- Refresh the pack panel to show updated rule count
+                if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                    _G.MountieMainFrame.packPanel.refreshPacks()
+                end
             end
         end)
 
@@ -76,7 +84,7 @@ end
 function MountieUI.ShowRulesDialog(pack)
     if not rulesDialog then
         local dlg = CreateFrame("Frame", "MountieRulesDialog", UIParent, "BasicFrameTemplateWithInset")
-        dlg:SetSize(420, 340)
+        dlg:SetSize(420, 400) -- Increased height for transmog controls
         dlg:SetPoint("CENTER")
         dlg:SetMovable(true)
         dlg:EnableMouse(true)
@@ -133,6 +141,10 @@ function MountieUI.ShowRulesDialog(pack)
             RebuildRulesList(dlg.rulesList, dlg.targetPack)
             -- Immediately re-evaluate active pack
             C_Timer.After(0.1, Mountie.SelectActivePack)
+            -- Refresh the pack panel to show updated rule count
+            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                _G.MountieMainFrame.packPanel.refreshPacks()
+            end
         end)
 
         -- Browse Zones button
@@ -149,9 +161,65 @@ function MountieUI.ShowRulesDialog(pack)
             end
         end)
 
+        -- Current transmog display
+        local transmogLabel = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        transmogLabel:SetPoint("TOPLEFT", addCurrentBtn, "BOTTOMLEFT", -110, -10)
+        transmogLabel:SetText("Current Transmog:")
+
+        local transmogText = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        transmogText:SetPoint("LEFT", transmogLabel, "RIGHT", 8, 0)
+        transmogText:SetText("None detected")
+
+        -- Add Current Transmog button
+        local addTransmogBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
+        addTransmogBtn:SetSize(130, 22)
+        addTransmogBtn:SetPoint("LEFT", transmogText, "RIGHT", 10, 0)
+        addTransmogBtn:SetText("Add Current Transmog")
+        addTransmogBtn:SetScript("OnClick", function()
+            if not dlg.targetPack then return end
+            local setID = GetCurrentTransmogSetID()
+            if not setID then
+                Mountie.Print("No transmog set detected. Wear more pieces of a set.")
+                return
+            end
+            
+            EnsureConditions(dlg.targetPack)
+            table.insert(dlg.targetPack.conditions, {
+                type = "transmog",
+                setID = setID,
+                priority = MountieDB.settings.rulePriorities.transmog or 100,
+            })
+            
+            local setInfo = Mountie.GetTransmogSetInfo(setID)
+            local setName = setInfo and setInfo.name or ("Set " .. setID)
+            Mountie.Print("Added transmog rule: " .. setName)
+            
+            RebuildRulesList(dlg.rulesList, dlg.targetPack)
+            C_Timer.After(0.1, Mountie.SelectActivePack)
+            
+            -- Refresh pack panel
+            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                _G.MountieMainFrame.packPanel.refreshPacks()
+            end
+        end)
+
+        -- Browse Transmog Sets button
+        local browseTransmogBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
+        browseTransmogBtn:SetSize(130, 22)
+        browseTransmogBtn:SetPoint("TOP", addTransmogBtn, "BOTTOM", 0, 0)
+        browseTransmogBtn:SetText("Browse Transmog Sets")
+        browseTransmogBtn:SetScript("OnClick", function()
+            if dlg.transmogPicker then
+                dlg.transmogPicker:Show()
+            else
+                dlg.transmogPicker = MountieUI.CreateTransmogPicker(dlg)
+                dlg.transmogPicker:Show()
+            end
+        end)
+
         -- Rules list container
         local listLabel = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        listLabel:SetPoint("TOPLEFT", parentCheck, "BOTTOMLEFT", 0, -16)
+        listLabel:SetPoint("TOPLEFT", transmogLabel, "BOTTOMLEFT", 0, -16)
         listLabel:SetText("Rules for this pack:")
 
         local rulesScroll = CreateFrame("ScrollFrame", nil, dlg, "UIPanelScrollFrameTemplate")
@@ -171,12 +239,27 @@ function MountieUI.ShowRulesDialog(pack)
         -- Store refs
         dlg.zoneText = zoneText
         dlg.parentCheck = parentCheck
+        dlg.transmogText = transmogText
+        dlg.addTransmogBtn = addTransmogBtn
 
-        -- OnShow: refresh current zone and list
+        -- OnShow: refresh current zone and transmog info and list
         dlg:SetScript("OnShow", function(self)
             local mapID = C_Map.GetBestMapForUnit("player")
             local mi = mapID and C_Map.GetMapInfo(mapID) or nil
             self.zoneText:SetText(mi and (mi.name .. " (ID " .. mapID .. ")") or "Unknown")
+            
+            -- Update current transmog display
+            local currentSetID = GetCurrentTransmogSetID()
+            if currentSetID then
+                local setInfo = Mountie.GetTransmogSetInfo(currentSetID)
+                local setName = setInfo and setInfo.name or ("Set " .. currentSetID)
+                self.transmogText:SetText(setName)
+                self.addTransmogBtn:SetEnabled(true)
+            else
+                self.transmogText:SetText("None detected")
+                self.addTransmogBtn:SetEnabled(false)
+            end
+            
             if self.targetPack then
                 self.packNameText:SetText(self.targetPack.name)
                 RebuildRulesList(self.rulesList, self.targetPack)
@@ -654,6 +737,10 @@ function MountieUI.CreateZonePicker(parentDialog)
             
             RebuildRulesList(parentDialog.rulesList, parentDialog.targetPack)
             C_Timer.After(0.1, Mountie.SelectActivePack)
+            -- Refresh the pack panel to show updated rule count
+            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                _G.MountieMainFrame.packPanel.refreshPacks()
+            end
             picker:Hide()
         end
     end)
@@ -669,6 +756,321 @@ function MountieUI.CreateZonePicker(parentDialog)
 
     picker:Hide()
     table.insert(UISpecialFrames, "MountieZonePicker")
+    return picker
+end
+
+-- Transmog Set Picker Dialog
+function MountieUI.CreateTransmogPicker(parentDialog)
+    local picker = CreateFrame("Frame", "MountieTransmogPicker", UIParent, "BasicFrameTemplateWithInset")
+    picker:SetSize(500, 450)
+    picker:SetPoint("CENTER", parentDialog, "CENTER", 60, 0)
+    picker:SetMovable(true)
+    picker:EnableMouse(true)
+    picker:RegisterForDrag("LeftButton")
+    picker:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    picker:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    picker:SetFrameStrata("FULLSCREEN_DIALOG")
+    picker:SetFrameLevel(parentDialog:GetFrameLevel() + 1)
+
+    picker.TitleText:SetText("Select Transmog Set")
+
+    picker.CloseButton:SetScript("OnClick", function()
+        picker:Hide()
+    end)
+
+    -- Search box
+    local searchLabel = picker:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    searchLabel:SetPoint("TOPLEFT", picker, "TOPLEFT", 20, -40)
+    searchLabel:SetText("Search:")
+
+    local searchBox = CreateFrame("EditBox", nil, picker, "InputBoxTemplate")
+    searchBox:SetSize(200, 25)
+    searchBox:SetPoint("LEFT", searchLabel, "RIGHT", 10, 0)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetMaxLetters(50)
+
+    -- Filter dropdown for expansions
+    local filterLabel = picker:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    filterLabel:SetPoint("LEFT", searchBox, "RIGHT", 20, 0)
+    filterLabel:SetText("Expansion:")
+
+    local expansionFilter = CreateFrame("Frame", nil, picker, "UIDropDownMenuTemplate")
+    expansionFilter:SetPoint("LEFT", filterLabel, "RIGHT", 5, 0)
+    expansionFilter:SetSize(120, 20)
+
+    -- Collection filter
+    local collectedCheck = CreateFrame("CheckButton", nil, picker, "UICheckButtonTemplate")
+    collectedCheck:SetPoint("TOPLEFT", searchLabel, "BOTTOMLEFT", 0, -10)
+    collectedCheck.text = collectedCheck:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    collectedCheck.text:SetPoint("LEFT", collectedCheck, "RIGHT", 5, 0)
+    collectedCheck.text:SetText("Show only collected sets")
+    collectedCheck:SetChecked(true) -- Default to collected only
+
+    -- Transmog set list
+    local setScroll = CreateFrame("ScrollFrame", nil, picker, "UIPanelScrollFrameTemplate")
+    setScroll:SetPoint("TOPLEFT", collectedCheck, "BOTTOMLEFT", 0, -15)
+    setScroll:SetPoint("BOTTOMRIGHT", picker, "BOTTOMRIGHT", -50, 50)
+
+    local setContent = CreateFrame("Frame", nil, setScroll)
+    setContent:SetSize(430, 1)
+    setScroll:SetScrollChild(setContent)
+
+    -- Add Set button
+    local addBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
+    addBtn:SetSize(80, 25)
+    addBtn:SetPoint("BOTTOMRIGHT", picker, "BOTTOMRIGHT", -20, 20)
+    addBtn:SetText("Add Set")
+    addBtn:SetEnabled(false)
+
+    -- Cancel button
+    local cancelBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
+    cancelBtn:SetSize(80, 25)
+    cancelBtn:SetPoint("RIGHT", addBtn, "LEFT", -10, 0)
+    cancelBtn:SetText("Cancel")
+    cancelBtn:SetScript("OnClick", function() picker:Hide() end)
+
+    -- Store state
+    picker.selectedSetID = nil
+    picker.setButtons = {}
+
+    -- Expansion names for filter
+    local expansionNames = {
+        [0] = "Classic",
+        [1] = "Burning Crusade", 
+        [2] = "Wrath of the Lich King",
+        [3] = "Cataclysm",
+        [4] = "Mists of Pandaria",
+        [5] = "Warlords of Draenor",
+        [6] = "Legion",
+        [7] = "Battle for Azeroth",
+        [8] = "Shadowlands",
+        [9] = "Dragonflight",
+        [10] = "The War Within"
+    }
+
+    -- Initialize expansion filter dropdown
+    local function InitializeExpansionDropdown(self, level)
+        local info = UIDropDownMenu_CreateInfo()
+        if level == 1 then
+            info.text = "All Expansions"
+            info.value = -1
+            info.func = function()
+                UIDropDownMenu_SetSelectedValue(expansionFilter, -1)
+                PopulateSetList()
+            end
+            info.checked = UIDropDownMenu_GetSelectedValue(expansionFilter) == -1
+            UIDropDownMenu_AddButton(info)
+
+            -- Add expansion options
+            for expID = 0, 10 do
+                if expansionNames[expID] then
+                    info.text = expansionNames[expID]
+                    info.value = expID
+                    info.func = function()
+                        UIDropDownMenu_SetSelectedValue(expansionFilter, expID)
+                        PopulateSetList()
+                    end
+                    info.checked = UIDropDownMenu_GetSelectedValue(expansionFilter) == expID
+                    UIDropDownMenu_AddButton(info)
+                end
+            end
+        end
+    end
+
+    UIDropDownMenu_Initialize(expansionFilter, InitializeExpansionDropdown)
+    UIDropDownMenu_SetSelectedValue(expansionFilter, -1)
+    UIDropDownMenu_SetText(expansionFilter, "All")
+    UIDropDownMenu_SetWidth(expansionFilter, 100)
+
+    -- Function to populate transmog set list
+    function PopulateSetList()
+        -- Clear existing buttons
+        for _, btn in ipairs(picker.setButtons) do
+            btn:Hide()
+            btn:SetParent(nil)
+        end
+        picker.setButtons = {}
+
+        -- Get filter values
+        local searchText = string.lower(searchBox:GetText() or "")
+        local selectedExpansion = UIDropDownMenu_GetSelectedValue(expansionFilter) or -1
+        local collectedOnly = collectedCheck:GetChecked()
+
+        -- Get all transmog sets
+        local allSets = Mountie.GetAllTransmogSets()
+        local filteredSets = {}
+
+        for _, setData in ipairs(allSets) do
+            local include = true
+
+            -- Apply filters
+            if searchText ~= "" and not string.find(string.lower(setData.name), searchText) then
+                include = false
+            end
+
+            if selectedExpansion >= 0 and setData.expansionID ~= selectedExpansion then
+                include = false
+            end
+
+            if collectedOnly and not setData.collected then
+                include = false
+            end
+
+            if include then
+                table.insert(filteredSets, setData)
+            end
+        end
+
+        -- Create buttons for filtered sets
+        for i, setData in ipairs(filteredSets) do
+            local btn = CreateFrame("Button", nil, setContent, "BackdropTemplate")
+            btn:SetSize(410, 30)
+            btn:SetPoint("TOPLEFT", setContent, "TOPLEFT", 0, -(i-1) * 32)
+
+            btn:SetBackdrop({
+                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                tile = true, tileSize = 16, edgeSize = 8,
+                insets = { left = 2, right = 2, top = 2, bottom = 2 }
+            })
+            btn:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+            btn:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
+
+            -- Set name
+            local nameText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            nameText:SetPoint("LEFT", btn, "LEFT", 8, 0)
+            nameText:SetPoint("RIGHT", btn, "RIGHT", -120, 0)
+            nameText:SetJustifyH("LEFT")
+            nameText:SetText(setData.name)
+            
+            if setData.collected then
+                nameText:SetTextColor(1, 1, 1, 1)
+            else
+                nameText:SetTextColor(0.6, 0.6, 0.6, 1)
+            end
+
+            -- Expansion name
+            local expText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            expText:SetPoint("RIGHT", btn, "RIGHT", -40, 0)
+            expText:SetText(expansionNames[setData.expansionID] or "Unknown")
+            expText:SetTextColor(0.8, 0.8, 0.8, 1)
+
+            -- Set ID
+            local idText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            idText:SetPoint("RIGHT", btn, "RIGHT", -8, 0)
+            idText:SetText(tostring(setData.setID))
+            idText:SetTextColor(0.6, 0.6, 0.6, 1)
+
+            -- Store set data
+            btn.setData = setData
+
+            -- Click handler
+            btn:SetScript("OnClick", function()
+                -- Clear previous selection
+                if picker.selectedButton then
+                    picker.selectedButton:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+                end
+
+                -- Select this set
+                picker.selectedSetID = setData.setID
+                picker.selectedButton = btn
+                btn:SetBackdropColor(0.2, 0.4, 0.2, 0.8)
+                addBtn:SetEnabled(true)
+            end)
+
+            -- Hover effects
+            btn:SetScript("OnEnter", function(self)
+                if self ~= picker.selectedButton then
+                    self:SetBackdropColor(0.2, 0.2, 0.2, 0.8)
+                end
+                
+                -- Show set preview in tooltip
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText(setData.name, 1, 1, 1)
+                if expansionNames[setData.expansionID] then
+                    GameTooltip:AddLine(expansionNames[setData.expansionID], 0.8, 0.8, 0.8)
+                end
+                GameTooltip:AddLine("Set ID: " .. setData.setID, 0.6, 0.6, 0.6)
+                if setData.collected then
+                    GameTooltip:AddLine("Collected", 0.5, 1, 0.5)
+                else
+                    GameTooltip:AddLine("Not collected", 1, 0.5, 0.5)
+                end
+                GameTooltip:Show()
+            end)
+
+            btn:SetScript("OnLeave", function(self)
+                if self ~= picker.selectedButton then
+                    self:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+                end
+                GameTooltip:Hide()
+            end)
+
+            picker.setButtons[i] = btn
+        end
+
+        -- Update content height
+        local contentHeight = math.max(#filteredSets * 32, 1)
+        setContent:SetHeight(contentHeight)
+
+        -- Manage scrollbar
+        if setScroll.ScrollBar then
+            if contentHeight > setScroll:GetHeight() then
+                setScroll.ScrollBar:Show()
+            else
+                setScroll.ScrollBar:Hide()
+                setScroll:SetVerticalScroll(0)
+            end
+        end
+    end
+
+    -- Search functionality
+    searchBox:SetScript("OnTextChanged", function(self)
+        PopulateSetList()
+    end)
+
+    -- Collection filter
+    collectedCheck:SetScript("OnClick", function(self)
+        PopulateSetList()
+    end)
+
+    -- Add button functionality
+    addBtn:SetScript("OnClick", function()
+        if picker.selectedSetID and parentDialog.targetPack then
+            EnsureConditions(parentDialog.targetPack)
+            table.insert(parentDialog.targetPack.conditions, {
+                type = "transmog",
+                setID = picker.selectedSetID,
+                priority = MountieDB.settings.rulePriorities.transmog or 100,
+            })
+
+            local setInfo = Mountie.GetTransmogSetInfo(picker.selectedSetID)
+            local setName = setInfo and setInfo.name or ("Set " .. picker.selectedSetID)
+            Mountie.Print("Added transmog rule: " .. setName)
+
+            RebuildRulesList(parentDialog.rulesList, parentDialog.targetPack)
+            C_Timer.After(0.1, Mountie.SelectActivePack)
+            
+            -- Refresh pack panel
+            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                _G.MountieMainFrame.packPanel.refreshPacks()
+            end
+            
+            picker:Hide()
+        end
+    end)
+
+    -- OnShow: populate list and reset selection
+    picker:SetScript("OnShow", function(self)
+        self.selectedSetID = nil
+        self.selectedButton = nil
+        addBtn:SetEnabled(false)
+        searchBox:SetText("")
+        PopulateSetList()
+    end)
+
+    picker:Hide()
+    table.insert(UISpecialFrames, "MountieTransmogPicker")
     return picker
 end
 

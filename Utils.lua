@@ -13,6 +13,13 @@ MountieDB = MountieDB or {
     packs = {},
     settings = {
         debugMode = false,
+        preferFlyingMounts = true,
+        packOverlapMode = "priority", -- "priority" or "intersection"
+        rulePriorities = {
+            transmog = 100,
+            zone = 50,
+            -- Future: time = 25, dungeon = 75, etc.
+        }
     }
 }
 
@@ -40,6 +47,19 @@ function Mountie.Trim(s)
     if type(s) ~= "string" then return "" end
     return (s:gsub("^%s*(.-)%s*$", "%1"))
 end
+
+function MountieUI.GetDraggingMountID()
+    local list = Mountie.runtime and Mountie.runtime.mountList
+    if not list or not list.buttons then return nil end
+
+    for _, row in ipairs(list.buttons) do
+        if row and row.isDragging and row.data and row.data.id then
+            return row.data.id
+        end
+    end
+    return nil
+end
+
 
 -- Small helpers
 function Mountie.TableRemoveByIndex(t, idx)
