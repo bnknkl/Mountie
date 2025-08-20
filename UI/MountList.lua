@@ -1,170 +1,937 @@
--- Mountie: Mount List (scrolling list of mounts)
+-- Mountie: Mount List UI
 Mountie.Debug("UI/MountList.lua loading...")
 
-local function buildOwnedTable()
-    local t = {}
-    local ids = C_MountJournal.GetMountIDs()
-    for _, id in ipairs(ids) do
-        local name, spellID, icon, active, isUsable, sourceType, isFavorite, _, _, _, isCollected =
-            C_MountJournal.GetMountInfoByID(id)
-        local creatureDisplayInfoID, description, source, isSelfMount, mountTypeID =
-            C_MountJournal.GetMountInfoExtraByID(id)
-
-        t[#t+1] = {
-            id = id,
-            name = name or ("Mount "..id),
-            icon = icon,
-            isCollected = not not isCollected,
-            isFavorite = not not isFavorite,
-            isUsable = not not isUsable,
-            sourceText = source or "",
-            sourceType = sourceType,  -- numeric
-            mountTypeID = mountTypeID,
-            spellID = spellID,
-        }
+-- Helper function to check if a mount is flying using mount type IDs
+local function IsFlyingMount(mountID)
+    -- Get mount type ID from the API
+    local creatureDisplayInfoID, description, source, isSelfMount, mountTypeID, uiModelSceneID, animID, spellVisualKitID, disablePlayerMountPreview = C_MountJournal.GetMountInfoExtraByID(mountID)
+    
+    if not mountTypeID then
+        -- If we can't get mountTypeID, we can't reliably determine if it's flying
+        return false
     end
-    table.sort(t, function(a,b) return a.name < b.name end)
-    return t
+    
+    -- Debug: Log mount type IDs to help discover the patterns
+    if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+        local name = C_MountJournal.GetMountInfoByID(mountID)
+        Mountie.Debug("Mount: " .. (name or "Unknown") .. " | Type ID: " .. mountTypeID)
+    end
+    
+    -- Known flying mount type IDs based on actual data analysis
+    local flyingTypeIDs = {
+        402, -- Modern drakes (Highland Drake, Winding Slitherdrake, Renewed Proto-Drake, etc.)
+        424, -- Classic flying mounts (Golden Gryphon, Ebon Gryphon, most traditional flying mounts)
+        436, -- Swimming/flying hybrid mounts (Depthstalker, Wondrous Wavewhisker, etc.)
+        437, -- Flying discs and clouds (Red Flying Cloud, Golden Discus, Mogu Hazeblazer)
+        444  -- Special ground mounts (Charming Courier)
+    }
+    
+    -- Ground mount type IDs (for reference, these should NOT be flying)
+    -- 230: Regular ground mounts (horses, wolves, bears, raptors, etc.)
+    -- 241: Qiraji Battle Tanks
+    -- 254: Special ground mounts (Crimson Tidestallion)
+    -- 284: Chauffeured vehicles
+    -- 444: Special ground mounts (Charming Courier)
+    
+    -- Check if this mount's type ID is in our flying list
+    for _, flyingType in ipairs(flyingTypeIDs) do
+        if mountTypeID == flyingType then
+            return true
+        end
+    end
+    
+    return false
 end
 
--- Very small helper to match “source” filters the UI uses
-local function matchesSourceFilter(row, filterValue)
-    if filterValue == "all" or not filterValue then return true end
-    if filterValue == "favorites" then
-        return row.isFavorite
-    elseif filterValue == "drop" then
-        -- heuristic: source text contains drop-y words
-        local s = string.lower(row.sourceText or "")
-        return s:find("drop") or s:find("boss") or s:find("loot") or s:find("rare")
-    elseif filterValue == "vendor" then
-        local s = string.lower(row.sourceText or "")
-        return s:find("vendor") or s:find("purchase") or s:find("purchase")
-    end
-    return true
-end
-
--- Exposed: creates the scroll list frame
 function MountieUI.CreateMountList(parent)
-    local scroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, -60)
-    scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -30, 10)
+    local scrollFrame = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, -75)
+    scrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -30, 10)
 
-    local content = CreateFrame("Frame", nil, scroll)
-    content:SetSize(300, 1)
-    scroll:SetScrollChild(content)
+    local content = CreateFrame("Frame", nil, scrollFrame)
+    content:SetSize(320, 1)
+    scrollFrame:SetScrollChild(content)
 
-    scroll.content = content
-    scroll.buttons = {}  -- rows
-    scroll.rows = 0
-
-    return scroll
+    scrollFrame.content = content
+    scrollFrame.buttons = {}
+    return scrollFrame
 end
 
--- Row factory
-local function acquireRow(list, index)
-    local row = list.buttons[index]
-    if row then return row end
-
-    row = CreateFrame("Button", nil, list.content, "BackdropTemplate")
-    row:SetSize(300, 28)
-    row:SetBackdrop({
+function MountieUI.CreateMountButton(parent, index)
+    local button = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    button:SetSize(300, 40)
+    button:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 8,
+        tile = true, tileSize = 16, edgeSize = 12,
         insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    row:SetBackdropColor(0.06, 0.06, 0.10, 0.75)
-    row:SetBackdropBorderColor(0.25, 0.25, 0.35, 0.9)
+    button:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+    button:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 
-    if index == 1 then
-        row:SetPoint("TOPLEFT", list.content, "TOPLEFT", 0, 0)
-    else
-        row:SetPoint("TOPLEFT", list.buttons[index-1], "BOTTOMLEFT", 0, -2)
-    end
+    button:EnableMouse(true)
+    button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    button:RegisterForDrag("LeftButton")
+    button:SetMovable(true)
 
-    row.icon = row:CreateTexture(nil, "ARTWORK")
-    row.icon:SetSize(24, 24)
-    row.icon:SetPoint("LEFT", row, "LEFT", 6, 0)
+    local icon = button:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(32, 32)
+    icon:SetPoint("LEFT", button, "LEFT", 4, 0)
+    button.icon = icon
 
-    row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.nameText:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
-    row.nameText:SetPoint("RIGHT", row, "RIGHT", -6, 0)
-    row.nameText:SetJustifyH("LEFT")
+    local name = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    name:SetPoint("LEFT", icon, "RIGHT", 8, 0)
+    name:SetPoint("RIGHT", button, "RIGHT", -8, 0)
+    name:SetJustifyH("LEFT")
+    button.name = name
 
-    -- basic tooltip + drag stub (PackPanel checks .isDragging)
-    row:EnableMouse(true)
-    row:RegisterForDrag("LeftButton")
-    row:SetScript("OnEnter", function(self)
-        self:SetBackdropColor(0.10, 0.10, 0.18, 0.85)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        if self.data and self.data.spellID then
-            GameTooltip:SetMountBySpellID(self.data.spellID)
-        elseif self.data then
-            GameTooltip:SetText(self.data.name or "Mount", 1,1,1)
+    button:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(0.2, 0.2, 0.2, 0.8)
+        if self.mountData then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            local spellID = self.mountData.spellID
+            if spellID then
+                GameTooltip:SetMountBySpellID(spellID)
+            else
+                GameTooltip:SetText(self.mountData.name or "Unknown Mount")
+            end
+            GameTooltip:Show()
+            
+            -- Show mount model in flyout window
+            MountieUI.ShowMountModelFlyout(self.mountData)
         end
-        GameTooltip:Show()
     end)
-    row:SetScript("OnLeave", function(self)
-        self:SetBackdropColor(0.06, 0.06, 0.10, 0.75)
+    button:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
         GameTooltip:Hide()
+        -- Hide mount model flyout
+        MountieUI.HideMountModelFlyout()
     end)
-    row:SetScript("OnDragStart", function(self)
-        self.isDragging = true
-        -- We don’t need to set a real cursor payload; your PackPanel just checks the flag.
-    end)
-    row:SetScript("OnDragStop", function(self)
-        self.isDragging = false
-    end)
-    row:SetScript("OnClick", function(self)
-        if self.data and self.data.id then
-            Mountie.Print("Mount ID " .. self.data.id .. ": " .. (self.data.name or "Unknown"))
+
+    button:SetScript("OnDragStart", function(self)
+        if self.mountData and self.mountData.isCollected then
+            local dragFrame = CreateFrame("Frame", nil, UIParent)
+            dragFrame:SetSize(200, 30)
+            dragFrame:SetFrameStrata("TOOLTIP")
+            dragFrame:SetAlpha(0.8)
+
+            local dragIcon = dragFrame:CreateTexture(nil, "ARTWORK")
+            dragIcon:SetSize(24, 24)
+            dragIcon:SetPoint("LEFT", dragFrame, "LEFT", 0, 0)
+            dragIcon:SetTexture(self.mountData.icon)
+
+            local dragText = dragFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            dragText:SetPoint("LEFT", dragIcon, "RIGHT", 4, 0)
+            dragText:SetText(self.mountData.name)
+            dragText:SetTextColor(1, 1, 1, 1)
+
+            dragFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", GetCursorPosition() / UIParent:GetEffectiveScale())
+
+            self.dragFrame = dragFrame
+            self.isDragging = true
+
+            local function UpdateDragPosition()
+                if self.isDragging then
+                    local x, y = GetCursorPosition()
+                    local scale = UIParent:GetEffectiveScale()
+                    dragFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x / scale, y / scale)
+                    C_Timer.After(0.01, UpdateDragPosition)
+                end
+            end
+            UpdateDragPosition()
         end
     end)
 
-    list.buttons[index] = row
-    return row
+    button:SetScript("OnDragStop", function(self)
+        if self.isDragging then
+            self.isDragging = false
+            if self.dragFrame then
+                self.dragFrame:Hide()
+                self.dragFrame = nil
+            end
+            local packFrame = MountieUI.GetPackFrameUnderCursor()
+            if packFrame and packFrame.pack then
+                local success, message = Mountie.AddMountToPack(packFrame.pack.name, self.mountData.id)
+                Mountie.VerbosePrint(message)
+                if success then
+                    if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                        _G.MountieMainFrame.packPanel.refreshPacks()
+                    end
+                end
+            end
+        end
+    end)
+
+    button:SetScript("OnClick", function(self, mouseButton)
+        if mouseButton == "LeftButton" then
+            if self.mountData then
+                Mountie.Debug("Left-clicked: " .. self.mountData.name)
+                -- Debug mount data for filtering issues
+                if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+                    local m = self.mountData
+                    Mountie.Debug("  Mount ID: " .. (m.id or "nil"))
+                    Mountie.Debug("  isUsable: " .. tostring(m.isUsable))
+                    Mountie.Debug("  isCollected: " .. tostring(m.isCollected))
+                    Mountie.Debug("  isFactionSpecific: " .. tostring(m.isFactionSpecific))
+                    Mountie.Debug("  faction: " .. tostring(m.faction))
+                    Mountie.Debug("  sourceType: " .. tostring(m.sourceType))
+                    
+                    -- Check what the game APIs return directly
+                    local name, spellID, icon, active, isUsable, sourceType, isFavorite, isFactionSpecific, faction, shouldHideOnChar, isCollected =
+                        C_MountJournal.GetMountInfoByID(m.id)
+                    Mountie.Debug("  API isUsable: " .. tostring(isUsable))
+                    Mountie.Debug("  API isFactionSpecific: " .. tostring(isFactionSpecific))
+                    Mountie.Debug("  API faction: " .. tostring(faction))
+                    
+                    local playerFaction = UnitFactionGroup("player")
+                    Mountie.Debug("  Player faction: " .. tostring(playerFaction))
+                end
+            end
+        elseif mouseButton == "RightButton" then
+            if self.mountData and self.mountData.isCollected then
+                MountieUI.ShowMountContextMenu(self.mountData, self)
+            end
+        end
+    end)
+
+    return button
 end
 
--- Exposed: repopulate list based on filters/search
-function MountieUI.UpdateMountList(list, showUnowned, searchText, sourceFilter)
-    searchText = string.lower(tostring(searchText or ""))
+function MountieUI.UpdateMountList(scrollFrame, showUnowned, searchText, sourceFilter, hideUnusable, flyingOnly)
+    local content = scrollFrame.content
+    local buttons = scrollFrame.buttons
 
-    local data = buildOwnedTable()
-    local filtered = {}
-    for _, row in ipairs(data) do
-        if (showUnowned or row.isCollected) and matchesSourceFilter(row, sourceFilter) then
-            if searchText == "" or string.find(string.lower(row.name), searchText, 1, true) then
-                filtered[#filtered+1] = row
+    -- Handle both old and new calling conventions
+    local filters
+    if type(showUnowned) == "table" then
+        -- New calling convention: UpdateMountList(scrollFrame, filtersObject)
+        filters = showUnowned
+    else
+        -- Old calling convention: UpdateMountList(scrollFrame, showUnowned, searchText, sourceFilter, hideUnusable, flyingOnly)
+        filters = {
+            showUnowned = showUnowned or false,
+            searchText = searchText or "",
+            sourceFilter = sourceFilter or "all",
+            hideUnusable = hideUnusable == nil and true or hideUnusable,
+            flyingOnly = flyingOnly or false
+        }
+    end
+
+    -- Parse filters from the structure
+    showUnowned = filters.showUnowned or false
+    searchText = filters.searchText or ""
+    sourceFilter = filters.sourceFilter or "all"
+    hideUnusable = filters.hideUnusable == nil and true or filters.hideUnusable
+    flyingOnly = filters.flyingOnly or false
+
+    -- Debug filter values
+    if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+        Mountie.Debug("UpdateMountList called with filters:")
+        Mountie.Debug("  showUnowned: " .. tostring(showUnowned))
+        Mountie.Debug("  searchText: '" .. searchText .. "'")
+        Mountie.Debug("  sourceFilter: " .. sourceFilter)
+        Mountie.Debug("  hideUnusable: " .. tostring(hideUnusable))
+        Mountie.Debug("  flyingOnly: " .. tostring(flyingOnly))
+    end
+
+    -- Get player info for unusable filtering
+    local playerClass = select(2, UnitClass("player"))
+    local playerFaction = UnitFactionGroup("player")
+
+    if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+        Mountie.Debug("Player info - Class: " .. tostring(playerClass) .. ", Faction: " .. tostring(playerFaction))
+    end
+
+    local mounts = {}
+    if showUnowned then
+        if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+            Mountie.Debug("Getting all mounts (including unowned)")
+        end
+        local allMountIDs = C_MountJournal.GetMountIDs()
+        for _, mountID in ipairs(allMountIDs) do
+            local name, spellID, icon, active, isUsable, sourceType, isFavorite, isFactionSpecific, faction, shouldHideOnChar, isCollected =
+                C_MountJournal.GetMountInfoByID(mountID)
+            if name then
+                table.insert(mounts, {
+                    id = mountID, name = name, icon = icon, spellID = spellID,
+                    isCollected = isCollected, isUsable = isUsable,
+                    sourceType = sourceType, isFavorite = isFavorite,
+                    isFactionSpecific = isFactionSpecific, faction = faction
+                })
+            end
+        end
+    else
+        if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+            Mountie.Debug("Getting owned mounts only")
+        end
+        mounts = Mountie.GetOwnedMounts()
+        for _, mount in ipairs(mounts) do
+            local _, spellID, _, _, _, sourceType, isFavorite, isFactionSpecific, faction =
+                C_MountJournal.GetMountInfoByID(mount.id)
+            mount.spellID = spellID
+            mount.isCollected = true
+            mount.sourceType = sourceType
+            mount.isFavorite = isFavorite
+            mount.isFactionSpecific = isFactionSpecific
+            mount.faction = faction
+        end
+    end
+
+    if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+        Mountie.Debug("Initial mount count: " .. #mounts)
+        Mountie.Debug("About to start filtering - hideUnusable: " .. tostring(hideUnusable))
+        Mountie.Debug("hideUnusable type: " .. type(hideUnusable))
+        Mountie.Debug("hideUnusable == true: " .. tostring(hideUnusable == true))
+        Mountie.Debug("About to check hideUnusable condition...")
+    end
+
+    -- Apply hideUnusable filter
+    if hideUnusable then
+        if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+            Mountie.Debug("SUCCESS: Inside hideUnusable filter block!")
+            Mountie.Debug("Testing basic filter...")
+        end
+        
+        local filtered = {}
+        for i, m in ipairs(mounts) do
+            if m.isUsable then
+                table.insert(filtered, m)
+            end
+        end
+        mounts = filtered
+        
+        if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+            Mountie.Debug("Basic filter complete: " .. #mounts .. " usable mounts remaining")
+        end
+    end
+
+    -- Apply flying only filter
+    if flyingOnly then
+        local filtered = {}
+        for _, m in ipairs(mounts) do
+            if IsFlyingMount(m.id) then
+                table.insert(filtered, m)
+            end
+        end
+        mounts = filtered
+    end
+
+    -- Apply search filter
+    if searchText ~= "" then
+        local filtered = {}
+        local searchLower = string.lower(searchText)
+        for _, m in ipairs(mounts) do
+            if string.find(string.lower(m.name), searchLower) then
+                table.insert(filtered, m)
+            end
+        end
+        mounts = filtered
+    end
+
+    -- Apply source filter
+    if sourceFilter ~= "all" then
+        local filtered = {}
+        for _, m in ipairs(mounts) do
+            local include = false
+            if sourceFilter == "favorites" then
+                include = m.isFavorite
+            elseif sourceFilter == "drop" then
+                include = m.sourceType == Enum.MountSourceType.Drop
+            elseif sourceFilter == "vendor" then
+                include = m.sourceType == Enum.MountSourceType.Vendor
+            end
+            if include then table.insert(filtered, m) end
+        end
+        mounts = filtered
+    end
+
+    table.sort(mounts, function(a, b) return a.name < b.name end)
+
+    for i, mountData in ipairs(mounts) do
+        local button = buttons[i]
+        if not button then
+            button = MountieUI.CreateMountButton(content, i)
+            button:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -(i-1) * 45)
+            buttons[i] = button
+        end
+        button.mountData = mountData
+        button.icon:SetTexture(mountData.icon)
+        button.name:SetText(mountData.name)
+        if mountData.isCollected then
+            button.name:SetTextColor(1, 1, 1, 1)
+        else
+            button.name:SetTextColor(0.6, 0.6, 0.6, 1)
+        end
+        button:Show()
+    end
+
+    for i = #mounts + 1, #buttons do
+        buttons[i]:Hide()
+    end
+
+    local contentHeight = math.max(#mounts * 45, 1)
+    content:SetHeight(contentHeight)
+    
+    -- Update the mount counter if it exists
+    local mainFrame = _G.MountieMainFrame
+    if mainFrame and mainFrame.mountPanel and mainFrame.mountPanel.mountCounter then
+        local counter = mainFrame.mountPanel.mountCounter
+        local filterText = ""
+        
+        -- Add filter description
+        if flyingOnly then
+            filterText = " flying"
+        end
+        if not showUnowned then
+            filterText = filterText .. " owned"
+        end
+        if hideUnusable then
+            filterText = filterText .. " usable"
+        end
+        if searchText ~= "" then
+            filterText = filterText .. " matching '" .. searchText .. "'"
+        end
+        if sourceFilter ~= "all" then
+            if sourceFilter == "favorites" then
+                filterText = filterText .. " favorite"
+            end
+        end
+        
+        counter:SetText(#mounts .. filterText .. " mount" .. (#mounts == 1 and "" or "s"))
+    end
+end
+
+-- Debug function to help discover mount type IDs - call this from console
+function MountieUI.DebugMountTypes()
+    if not MountieDB.settings.debugMode then
+        Mountie.Print("Enable debug mode first with: /mountie debug-on")
+        return
+    end
+    
+    Mountie.Print("Scanning mount type IDs... check console for output")
+    
+    local typeStats = {}
+    local allMountIDs = C_MountJournal.GetMountIDs()
+    
+    for _, mountID in ipairs(allMountIDs) do
+        local name, spellID, icon, active, isUsable, sourceType, isFavorite, isFactionSpecific, faction, shouldHideOnChar, isCollected = C_MountJournal.GetMountInfoByID(mountID)
+        
+        if isCollected and name then
+            local creatureDisplayInfoID, description, source, isSelfMount, mountTypeID = C_MountJournal.GetMountInfoExtraByID(mountID)
+            
+            if mountTypeID then
+                if not typeStats[mountTypeID] then
+                    typeStats[mountTypeID] = {}
+                end
+                table.insert(typeStats[mountTypeID], name)
             end
         end
     end
-
-    -- ensure enough rows
-    for i = 1, #filtered do
-        local r = acquireRow(list, i)
-        local d = filtered[i]
-        r.data = d
-        r.icon:SetTexture(d.icon)
-        r.nameText:SetText(d.name .. (d.isFavorite and "  |TInterface\\COMMON\\ReputationStar:0|t" or ""))
-        if d.isCollected then
-            r.nameText:SetTextColor(0.95, 0.95, 0.95, 1)
-        else
-            r.nameText:SetTextColor(0.6, 0.6, 0.6, 1)
+    
+    -- Print the results
+    local sortedTypes = {}
+    for typeID, _ in pairs(typeStats) do
+        table.insert(sortedTypes, typeID)
+    end
+    table.sort(sortedTypes)
+    
+    Mountie.Print("=== Mount Type ID Analysis ===")
+    for _, typeID in ipairs(sortedTypes) do
+        local mounts = typeStats[typeID]
+        Mountie.Print("Type " .. typeID .. " (" .. #mounts .. " mounts):")
+        for i = 1, math.min(3, #mounts) do  -- Show first 3 examples
+            Mountie.Print("  - " .. mounts[i])
         end
-        r:Show()
+        if #mounts > 3 then
+            Mountie.Print("  ... and " .. (#mounts - 3) .. " more")
+        end
+    end
+    Mountie.Print("=== End Analysis ===")
+end
+
+-- Debug function to analyze faction filtering issues
+function MountieUI.DebugFactionMounts()
+    if not MountieDB.settings.debugMode then
+        Mountie.Print("Enable debug mode first with: /mountie debug-on")
+        return
+    end
+    
+    Mountie.Print("Analyzing faction-specific mounts...")
+    
+    local playerFaction = UnitFactionGroup("player")
+    local allMountIDs = C_MountJournal.GetMountIDs()
+    local factionMounts = {}
+    
+    for _, mountID in ipairs(allMountIDs) do
+        local name, spellID, icon, active, isUsable, sourceType, isFavorite, isFactionSpecific, faction, shouldHideOnChar, isCollected = C_MountJournal.GetMountInfoByID(mountID)
+        
+        if isCollected and name and isFactionSpecific then
+            table.insert(factionMounts, {
+                name = name,
+                faction = faction,
+                isUsable = isUsable,
+                mountID = mountID
+            })
+        end
+    end
+    
+    Mountie.Print("=== Faction Mount Analysis ===")
+    Mountie.Print("Player faction: " .. tostring(playerFaction))
+    Mountie.Print("Found " .. #factionMounts .. " faction-specific mounts:")
+    
+    for _, mount in ipairs(factionMounts) do
+        local factionName = "Unknown"
+        if mount.faction == 0 then factionName = "Horde"
+        elseif mount.faction == 1 then factionName = "Alliance"
+        end
+        
+        local shouldBeUsable = (mount.faction == 1 and playerFaction == "Alliance") or (mount.faction == 0 and playerFaction == "Horde")
+        local status = ""
+        if mount.isUsable ~= shouldBeUsable then
+            status = " [MISMATCH!]"
+        end
+        
+        Mountie.Print("  " .. mount.name .. " - " .. factionName .. " (API usable: " .. tostring(mount.isUsable) .. ")" .. status)
+    end
+    Mountie.Print("=== End Analysis ===")
+end
+
+-- Mount Context Menu
+function MountieUI.CreateMountContextMenu()
+    local menu = CreateFrame("Frame", "MountieMountContextMenu", UIParent, "BackdropTemplate")
+    menu:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    menu:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
+    menu:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+    menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    menu:SetFrameLevel(1000)
+    menu:EnableMouse(true)
+
+    local closeButton = CreateFrame("Button", nil, menu)
+    closeButton:SetSize(16, 16)
+    closeButton:SetPoint("TOPRIGHT", menu, "TOPRIGHT", -5, -5)
+    closeButton:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
+    closeButton:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight")
+    closeButton:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
+    closeButton:SetScript("OnClick", function() menu:Hide() end)
+
+    local title = menu:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", menu, "TOP", 0, -10)
+    title:SetText("Add to Pack")
+    title:SetTextColor(1, 1, 0.8, 1)
+
+    menu.title = title
+    menu.closeButton = closeButton
+    menu.packButtons = {}
+    menu.targetMount = nil
+
+    menu:SetScript("OnShow", function(self)
+        local hideFrame = CreateFrame("Frame", nil, UIParent)
+        hideFrame:SetAllPoints(UIParent)
+        hideFrame:SetFrameStrata("BACKGROUND")
+        hideFrame:EnableMouse(true)
+        hideFrame:SetScript("OnMouseDown", function()
+            self:Hide()
+            hideFrame:Hide()
+        end)
+        self:HookScript("OnHide", function()
+            if hideFrame then hideFrame:Hide() end
+        end)
+    end)
+
+    menu:Hide()
+    return menu
+end
+
+function MountieUI.UpdateMountContextMenu(menu, mountData)
+    local packs = Mountie.ListPacks()
+    local packButtons = menu.packButtons
+
+    for _, b in ipairs(packButtons) do
+        b:Hide()
+        b:SetParent(nil)
+    end
+    packButtons = {}
+    menu.packButtons = packButtons
+
+    if #packs == 0 then
+        menu:SetSize(160, 60)
+        local noPacks = menu:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        noPacks:SetPoint("CENTER", menu, "CENTER", 0, -10)
+        noPacks:SetText("No packs created yet")
+        noPacks:SetTextColor(0.6, 0.6, 0.6, 1)
+        return
     end
 
-    -- hide extra rows
-    for i = #filtered + 1, #list.buttons do
-        list.buttons[i]:Hide()
-        list.buttons[i].data = nil
-        list.buttons[i].isDragging = false
+    local buttonHeight = 22
+    local buttonWidth = 140
+    local padding = 8
+    local titleHeight = 25
+    local maxPacks = 8
+    local visiblePacks = math.min(#packs, maxPacks)
+
+    local menuWidth = buttonWidth + (padding * 2)
+    local menuHeight = titleHeight + (visiblePacks * buttonHeight) + padding
+    menu:SetSize(menuWidth, menuHeight)
+
+    for i = 1, visiblePacks do
+        local pack = packs[i]
+        local button = CreateFrame("Button", nil, menu, "BackdropTemplate")
+        button:SetSize(buttonWidth, buttonHeight - 2)
+        button:SetPoint("TOP", menu.title, "BOTTOM", 0, -5 - ((i-1) * buttonHeight))
+
+        button:SetBackdrop({
+            bgFile = "Interface\\Buttons\\UI-Panel-Button-Up",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = false, edgeSize = 8,
+            insets = { left = 2, right = 2, top = 2, bottom = 2 }
+        })
+        button:SetBackdropColor(0.2, 0.2, 0.2, 1)
+        button:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+
+        local text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        text:SetPoint("CENTER", button, "CENTER", 0, 0)
+        text:SetJustifyH("CENTER")
+
+        local isInPack = false
+        for _, mountID in ipairs(pack.mounts) do
+            if mountID == mountData.id then isInPack = true; break end
+        end
+
+        if isInPack then
+            text:SetText(pack.name .. " ✓")
+            text:SetTextColor(0.8, 1, 0.8, 1)
+            button:SetBackdropColor(0.1, 0.3, 0.1, 1)
+            button:SetAlpha(0.8)
+        else
+            text:SetText(pack.name)
+            text:SetTextColor(1, 1, 1, 1)
+            button:SetBackdropColor(0.2, 0.2, 0.2, 1)
+            button:SetAlpha(1.0)
+        end
+
+        button:SetScript("OnEnter", function(self)
+            self:SetBackdropColor(0.3, 0.3, 0.3, 1)
+        end)
+        button:SetScript("OnLeave", function(self)
+            if isInPack then
+                self:SetBackdropColor(0.1, 0.3, 0.1, 1)
+            else
+                self:SetBackdropColor(0.2, 0.2, 0.2, 1)
+            end
+        end)
+        button:SetScript("OnClick", function()
+            if not isInPack then
+                local success, message = Mountie.AddMountToPack(pack.name, mountData.id)
+                Mountie.VerbosePrint(message)
+                if success then
+                    menu:Hide()
+                    if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                        _G.MountieMainFrame.packPanel.refreshPacks()
+                    end
+                end
+            else
+                Mountie.Print("Mount is already in pack '" .. pack.name .. "'")
+                menu:Hide()
+            end
+        end)
+
+        packButtons[i] = button
     end
 
-    -- content height
-    local rows = #filtered
-    local contentHeight = math.max(rows * 30, 1)
-    list.content:SetHeight(contentHeight)
+    if #packs > maxPacks then
+        local moreText = menu:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        moreText:SetPoint("BOTTOM", menu, "BOTTOM", 0, 5)
+        moreText:SetText("... and " .. (#packs - maxPacks) .. " more")
+        moreText:SetTextColor(0.6, 0.6, 0.6, 1)
+    end
+end
+
+local mountContextMenu = nil
+function MountieUI.ShowMountContextMenu(mountData, parentFrame)
+    if not mountContextMenu then
+        mountContextMenu = MountieUI.CreateMountContextMenu()
+    end
+    mountContextMenu.targetMount = mountData
+    MountieUI.UpdateMountContextMenu(mountContextMenu, mountData)
+    mountContextMenu:ClearAllPoints()
+    mountContextMenu:SetPoint("LEFT", parentFrame, "RIGHT", 5, 0)
+    mountContextMenu:Show()
+end
+
+function MountieUI.GetPackFrameUnderCursor()
+    if not _G.MountieMainFrame or not _G.MountieMainFrame.packPanel or not _G.MountieMainFrame.packPanel.packList then
+        return nil
+    end
+    local packFrames = _G.MountieMainFrame.packPanel.packList.packFrames
+    for _, frame in ipairs(packFrames) do
+        if frame:IsVisible() and frame:IsMouseOver() then
+            return frame
+        end
+    end
+    return nil
+end
+
+-- Mount Model Flyout Functions
+local mountModelFlyout = nil
+local mountDebugFlyout = nil
+
+function MountieUI.CreateMountModelFlyout()
+    if mountModelFlyout then
+        return mountModelFlyout
+    end
+    
+    -- Create the flyout frame
+    local flyout = CreateFrame("Frame", "MountieMountModelFlyout", UIParent, "BackdropTemplate")
+    flyout:SetSize(200, 250)
+    flyout:SetFrameStrata("DIALOG")
+    flyout:SetFrameLevel(1000)
+    
+    -- Set backdrop
+    flyout:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 }
+    })
+    flyout:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
+    flyout:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+    
+    -- Create model viewer using PlayerModel which supports creature display
+    local modelFrame = CreateFrame("PlayerModel", nil, flyout)
+    modelFrame:SetSize(180, 180)
+    modelFrame:SetPoint("CENTER", flyout, "CENTER", 0, 10)
+    
+    
+    -- Create mount name label
+    local nameLabel = flyout:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    nameLabel:SetPoint("BOTTOM", flyout, "BOTTOM", 0, -10)
+    nameLabel:SetTextColor(1, 1, 0.8, 1)
+    nameLabel:SetJustifyH("CENTER")
+    nameLabel:SetWordWrap(true)
+    nameLabel:SetWidth(180)
+    
+    flyout.modelFrame = modelFrame
+    flyout.nameLabel = nameLabel
+    flyout.rotationTimer = nil
+    flyout:Hide()
+    
+    mountModelFlyout = flyout
+    return flyout
+end
+
+function MountieUI.CreateMountDebugFlyout()
+    if mountDebugFlyout then
+        return mountDebugFlyout
+    end
+    
+    -- Create the debug flyout frame
+    local flyout = CreateFrame("Frame", "MountieMountDebugFlyout", UIParent, "BackdropTemplate")
+    flyout:SetSize(250, 200)
+    flyout:SetFrameStrata("DIALOG")
+    flyout:SetFrameLevel(1001) -- Higher than model flyout
+    
+    -- Set backdrop
+    flyout:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 }
+    })
+    flyout:SetBackdropColor(0.1, 0.05, 0.05, 0.95) -- Slightly reddish for debug
+    flyout:SetBackdropBorderColor(0.8, 0.3, 0.3, 1) -- Red border for debug
+    
+    -- Create title
+    local title = flyout:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", flyout, "TOP", 0, -8)
+    title:SetText("Debug Info")
+    title:SetTextColor(1, 0.3, 0.3, 1) -- Red title
+    
+    -- Create scrollable text area for debug info
+    local scrollFrame = CreateFrame("ScrollFrame", nil, flyout, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetSize(220, 150)
+    scrollFrame:SetPoint("TOP", title, "BOTTOM", 0, -5)
+    
+    local content = CreateFrame("Frame", nil, scrollFrame)
+    content:SetSize(220, 150)
+    scrollFrame:SetScrollChild(content)
+    
+    -- Create debug text
+    local debugText = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    debugText:SetPoint("TOPLEFT", content, "TOPLEFT", 5, -5)
+    debugText:SetPoint("TOPRIGHT", content, "TOPRIGHT", -5, -5)
+    debugText:SetJustifyH("LEFT")
+    debugText:SetJustifyV("TOP")
+    debugText:SetWordWrap(true)
+    debugText:SetTextColor(0.9, 0.9, 0.9, 1)
+    
+    flyout.title = title
+    flyout.debugText = debugText
+    flyout.content = content
+    flyout:Hide()
+    
+    mountDebugFlyout = flyout
+    return flyout
+end
+
+function MountieUI.ShowMountModelFlyout(mountData)
+    if not mountData or not mountData.id then
+        return
+    end
+    
+    local flyout = MountieUI.CreateMountModelFlyout()
+    
+    -- Position flyout to the left of the main frame
+    if _G.MountieMainFrame and _G.MountieMainFrame:IsShown() then
+        flyout:ClearAllPoints()
+        flyout:SetPoint("RIGHT", _G.MountieMainFrame, "LEFT", -10, 0)
+    else
+        -- Fallback position if main frame isn't available
+        flyout:SetPoint("CENTER", UIParent, "CENTER", -400, 0)
+    end
+    
+    -- Set mount name
+    flyout.nameLabel:SetText(mountData.name or "Unknown Mount")
+    
+    -- Set the mount model using PlayerModel methods
+    local creatureDisplayInfoID = C_MountJournal.GetMountInfoExtraByID(mountData.id)
+    
+    if creatureDisplayInfoID and creatureDisplayInfoID > 0 then
+        -- PlayerModel should support SetDisplayInfo or SetCreature
+        if flyout.modelFrame.SetDisplayInfo then
+            flyout.modelFrame:SetDisplayInfo(creatureDisplayInfoID)
+        elseif flyout.modelFrame.SetCreature then
+            -- Fallback: try using the mount ID as creature ID
+            flyout.modelFrame:SetCreature(mountData.id)
+        elseif flyout.modelFrame.SetUnit then
+            -- Another fallback: try setting as unit
+            flyout.modelFrame:SetUnit("player")
+        end
+        
+        -- Set initial facing and start rotation
+        if flyout.modelFrame.SetFacing then
+            flyout.modelFrame:SetFacing(0)
+        end
+    end
+    
+    -- Start slow rotation animation
+    if flyout.rotationTimer then
+        flyout.rotationTimer:Cancel()
+    end
+    
+    local currentRotation = 0
+    flyout.rotationTimer = C_Timer.NewTicker(0.05, function() -- Update every 50ms for smooth rotation
+        currentRotation = currentRotation + 0.02 -- Slow rotation speed
+        if currentRotation > math.pi * 2 then
+            currentRotation = 0
+        end
+        
+        if flyout.modelFrame.SetFacing and flyout:IsShown() then
+            flyout.modelFrame:SetFacing(currentRotation)
+        else
+            -- Stop rotation if flyout is hidden
+            if flyout.rotationTimer then
+                flyout.rotationTimer:Cancel()
+                flyout.rotationTimer = nil
+            end
+        end
+    end)
+    
+    flyout:Show()
+    
+    -- Show debug flyout if debug mode is enabled
+    if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+        MountieUI.ShowMountDebugFlyout(mountData, flyout)
+    end
+end
+
+function MountieUI.HideMountModelFlyout()
+    if mountModelFlyout then
+        -- Stop rotation timer
+        if mountModelFlyout.rotationTimer then
+            mountModelFlyout.rotationTimer:Cancel()
+            mountModelFlyout.rotationTimer = nil
+        end
+        mountModelFlyout:Hide()
+    end
+    
+    -- Also hide debug flyout
+    if mountDebugFlyout then
+        mountDebugFlyout:Hide()
+    end
+end
+
+function MountieUI.ShowMountDebugFlyout(mountData, modelFlyout)
+    if not mountData or not mountData.id then
+        return
+    end
+    
+    local debugFlyout = MountieUI.CreateMountDebugFlyout()
+    
+    -- Position debug flyout to the right of the model flyout
+    if modelFlyout and modelFlyout:IsShown() then
+        debugFlyout:ClearAllPoints()
+        debugFlyout:SetPoint("LEFT", modelFlyout, "RIGHT", 10, 0)
+    else
+        -- Fallback position
+        debugFlyout:SetPoint("CENTER", UIParent, "CENTER", 200, 0)
+    end
+    
+    -- Gather all mount data
+    local name, spellID, icon, active, isUsable, sourceType, isFavorite, isFactionSpecific, faction, shouldHideOnChar, isCollected = C_MountJournal.GetMountInfoByID(mountData.id)
+    local creatureDisplayInfoID, description, source, isSelfMount, mountTypeID, uiModelSceneID, animID, spellVisualKitID, disablePlayerMountPreview = C_MountJournal.GetMountInfoExtraByID(mountData.id)
+    
+    -- Format debug information
+    local debugInfo = string.format(
+        "Mount ID: %s\n" ..
+        "Name: %s\n" ..
+        "Spell ID: %s\n" ..
+        "Source Type: %s\n" ..
+        "Mount Type ID: %s\n" ..
+        "Display Info ID: %s\n" ..
+        "UI Model Scene ID: %s\n" ..
+        "Animation ID: %s\n" ..
+        "Spell Visual Kit ID: %s\n" ..
+        "Is Collected: %s\n" ..
+        "Is Usable: %s\n" ..
+        "Is Favorite: %s\n" ..
+        "Is Faction Specific: %s\n" ..
+        "Faction: %s\n" ..
+        "Should Hide: %s\n" ..
+        "Is Self Mount: %s\n" ..
+        "Description: %s\n" ..
+        "Source: %s",
+        tostring(mountData.id),
+        tostring(name),
+        tostring(spellID),
+        tostring(sourceType),
+        tostring(mountTypeID),
+        tostring(creatureDisplayInfoID),
+        tostring(uiModelSceneID),
+        tostring(animID),
+        tostring(spellVisualKitID),
+        tostring(isCollected),
+        tostring(isUsable),
+        tostring(isFavorite),
+        tostring(isFactionSpecific),
+        tostring(faction),
+        tostring(shouldHideOnChar),
+        tostring(isSelfMount),
+        tostring(description or "None"),
+        tostring(source or "None")
+    )
+    
+    debugFlyout.debugText:SetText(debugInfo)
+    
+    -- Adjust content height based on text
+    local textHeight = debugFlyout.debugText:GetStringHeight()
+    debugFlyout.content:SetHeight(math.max(textHeight + 10, 150))
+    
+    debugFlyout:Show()
 end
 
 Mountie.Debug("UI/MountList.lua loaded")

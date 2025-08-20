@@ -1,5 +1,5 @@
 -- Mountie: Pack Panel UI
-print("UI/PackPanel.lua loading...")
+Mountie.Debug("UI/PackPanel.lua loading...")
 
 function MountieUI.SetupPackPanel(packPanel)
     -- Pack panel title
@@ -26,14 +26,21 @@ function MountieUI.SetupPackPanel(packPanel)
         packDialog:Show()
     end)
     
-    -- Refresh function for pack list
+    -- Refresh function for pack list with escape handling
     local function refreshPacks()
         if packList then
+            -- Clean up any temporary expanded frame
+            local content = packList.content
+            if content.tempExpandedFrame then
+                content.tempExpandedFrame:Hide()
+                content.tempExpandedFrame:SetParent(nil)
+                content.tempExpandedFrame = nil
+            end
+            
             -- Get current packs
             local packs = Mountie.ListPacks()
             
             -- Clear existing frames
-            local content = packList.content
             local packFrames = packList.packFrames
             for i, frame in ipairs(packFrames) do
                 if frame then
@@ -55,6 +62,12 @@ function MountieUI.SetupPackPanel(packPanel)
             -- Update content height
             local contentHeight = math.max(#packs * 70, 1)
             content:SetHeight(contentHeight)
+            
+            -- Reset scroll position
+            local scrollFrame = content:GetParent()
+            if scrollFrame and scrollFrame.SetVerticalScroll then
+                scrollFrame:SetVerticalScroll(0)
+            end
         end
     end
     
@@ -65,7 +78,7 @@ function MountieUI.SetupPackPanel(packPanel)
     
     -- Also store a test function to verify the reference works
     packPanel.testFunction = function()
-        print("DEBUG: Test function called successfully")
+        Mountie.Debug("Test function called successfully")
         refreshPacks()
     end
 end
@@ -92,8 +105,6 @@ function MountieUI.CreatePackFrame(parent, pack)
     local frame = CreateFrame("Frame", nil, parent)
     frame:SetSize(300, 60)
     
-    -- No background at all - let the individual mount frames handle their own backgrounds
-    
     -- Expansion state
     frame.isExpanded = false
     frame.mountFrames = {}
@@ -112,10 +123,10 @@ function MountieUI.CreatePackFrame(parent, pack)
     name:SetTextColor(1, 1, 0.8, 1) -- Slightly yellow
     frame.nameText = name
     
-    -- Pack info (mount count and description)
+    -- Pack info (mount count, description, and rule count)
     local info = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     info:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -2)
-    info:SetPoint("RIGHT", frame, "RIGHT", -35, 0) -- Leave space for delete button
+    info:SetPoint("RIGHT", frame, "RIGHT", -70, 0) -- Leave space for rules and delete buttons
     info:SetJustifyH("LEFT")
     
     local mountCount = #pack.mounts
@@ -123,9 +134,38 @@ function MountieUI.CreatePackFrame(parent, pack)
     if pack.description and pack.description ~= "" then
         infoText = infoText .. " - " .. pack.description
     end
+    
+    -- Add rule count indicator with color
+    if pack.conditions and #pack.conditions > 0 then
+        infoText = infoText .. " |cff88ff88| " .. #pack.conditions .. " rule" .. (#pack.conditions == 1 and "" or "s") .. "|r"
+    end
+    
     info:SetText(infoText)
     info:SetTextColor(0.8, 0.8, 0.8, 1)
     frame.infoText = info
+    
+    -- Rules button (gear/settings icon)
+    local rulesButton = CreateFrame("Button", nil, frame)
+    rulesButton:SetSize(20, 20)
+    rulesButton:SetPoint("RIGHT", frame, "RIGHT", -33, 0) -- Position left of delete button
+    rulesButton:SetNormalTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Up")
+    rulesButton:SetHighlightTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Highlight") 
+    rulesButton:SetPushedTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Down")
+
+    rulesButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Pack Rules", 1, 1, 1)
+        GameTooltip:AddLine("Configure when this pack activates", 1, 0.8, 0.8)
+        GameTooltip:Show()
+    end)
+
+    rulesButton:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
+
+    rulesButton:SetScript("OnClick", function(self)
+        MountieUI.ShowRulesDialog(pack)
+    end)
     
     -- Delete button (trash icon)
     local deleteButton = CreateFrame("Button", nil, frame)
@@ -185,7 +225,7 @@ function MountieUI.CreatePackFrame(parent, pack)
 end
 
 function MountieUI.UpdatePackList(scrollFrame)
-    print("DEBUG: UpdatePackList starting...") -- Debug
+    Mountie.Debug("UpdatePackList starting...")
     
     local content = scrollFrame.content
     local packFrames = scrollFrame.packFrames
@@ -222,28 +262,195 @@ end
 
 -- Pack Expansion Functions
 function MountieUI.TogglePackExpansion(packFrame, pack)
-    if packFrame.isExpanded then
-        MountieUI.CollapsePackFrame(packFrame)
-        -- Refresh the entire pack list to restore proper positioning for ALL packs
-        if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
-            _G.MountieMainFrame.packPanel.refreshPacks()
+    -- Check if we currently have an expanded frame for this pack
+    local packPanel = _G.MountieMainFrame and _G.MountieMainFrame.packPanel
+    local isCurrentlyExpanded = packPanel and packPanel.tempExpandedFrame and packPanel.tempExpandedFrame:IsShown()
+    
+    if isCurrentlyExpanded then
+        -- We're collapsing - clean up temp expanded frame and show normal scroll view
+        if packPanel then
+            if packPanel.tempExpandedFrame then
+                packPanel.tempExpandedFrame:Hide()
+                packPanel.tempExpandedFrame:SetParent(nil)
+                packPanel.tempExpandedFrame = nil
+            end
+            if packPanel.packList then
+                packPanel.packList:Show()
+            end
         end
     else
-        -- First, refresh the pack list to ensure clean state
-        if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
-            _G.MountieMainFrame.packPanel.refreshPacks()
-        end
-        -- Then expand the specific pack we want
-        -- Find the refreshed frame for this pack
-        if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.packList then
-            local packFrames = _G.MountieMainFrame.packPanel.packList.packFrames
-            for _, frame in ipairs(packFrames) do
-                if frame.pack and frame.pack.name == pack.name then
-                    MountieUI.HideOtherPackFrames(frame)
-                    MountieUI.MovePackToTop(frame)
-                    MountieUI.ExpandPackFrame(frame, pack)
-                    break
+        -- We're expanding - create a properly clipped expanded view
+        if _G.MountieMainFrame and _G.MountieMainFrame.packPanel then
+            local packList = packPanel.packList
+            
+            -- Hide the scroll frame
+            if packList then
+                packList:Hide()
+            end
+            
+            -- Clean up any existing temp frame
+            if packPanel.tempExpandedFrame then
+                packPanel.tempExpandedFrame:Hide()
+                packPanel.tempExpandedFrame:SetParent(nil)
+            end
+            
+            -- Calculate the available area (same as the scroll frame)
+            local availableWidth = 320
+            local availableHeight = packPanel:GetHeight() - 100 -- Account for title and button
+            
+            -- Create a scroll frame to contain the expanded content
+            local expandedScrollFrame = CreateFrame("ScrollFrame", nil, packPanel, "UIPanelScrollFrameTemplate")
+            expandedScrollFrame:SetPoint("TOPLEFT", packPanel, "TOPLEFT", 20, -80)
+            expandedScrollFrame:SetSize(availableWidth, availableHeight)
+            
+            -- Create the content frame
+            local expandedContent = CreateFrame("Frame", nil, expandedScrollFrame)
+            expandedContent:SetSize(availableWidth - 30, 100) -- Start small, will resize
+            expandedScrollFrame:SetScrollChild(expandedContent)
+            
+            -- Add background to the content
+            local bg = expandedContent:CreateTexture(nil, "BACKGROUND")
+            bg:SetAllPoints(expandedContent)
+            bg:SetColorTexture(0.1, 0.1, 0.2, 0.8)
+            
+            -- Set up pack frame properties
+            expandedContent.isExpanded = true -- Mark as expanded
+            expandedContent.mountFrames = {}
+            expandedContent.pack = pack
+            
+            -- Add minus button (collapse indicator)
+            local minusButton = expandedContent:CreateTexture(nil, "OVERLAY")
+            minusButton:SetSize(12, 12)
+            minusButton:SetPoint("TOPLEFT", expandedContent, "TOPLEFT", 8, -8)
+            minusButton:SetTexture("Interface\\Buttons\\UI-MinusButton-Up")
+            expandedContent.minusButton = minusButton
+            
+            -- Add pack title
+            local name = expandedContent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+            name:SetPoint("TOPLEFT", minusButton, "TOPRIGHT", 5, 0)
+            name:SetText(pack.name)
+            name:SetTextColor(1, 1, 0.8, 1)
+            expandedContent.nameText = name
+            
+            -- Add pack info
+            local info = expandedContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            info:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -2)
+            info:SetPoint("RIGHT", expandedContent, "RIGHT", -70, 0) -- Leave space for Rules button
+            info:SetJustifyH("LEFT")
+            
+            local mountCount = #pack.mounts
+            local infoText = mountCount .. " mount" .. (mountCount == 1 and "" or "s")
+            if pack.description and pack.description ~= "" then
+                infoText = infoText .. " - " .. pack.description
+            end
+            if pack.conditions and #pack.conditions > 0 then
+                infoText = infoText .. " | " .. #pack.conditions .. " rule" .. (#pack.conditions == 1 and "" or "s")
+            end
+            info:SetText(infoText)
+            info:SetTextColor(0.8, 0.8, 0.8, 1)
+            expandedContent.infoText = info
+            
+            -- Add Rules button (gear/settings icon) - same as in normal pack view
+            local rulesButton = CreateFrame("Button", nil, expandedContent)
+            rulesButton:SetSize(20, 20)
+            rulesButton:SetPoint("TOPRIGHT", expandedContent, "TOPRIGHT", -8, -8) -- Top right corner
+            rulesButton:SetNormalTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Up")
+            rulesButton:SetHighlightTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Highlight") 
+            rulesButton:SetPushedTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Down")
+
+            rulesButton:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Pack Rules", 1, 1, 1)
+                GameTooltip:AddLine("Configure when this pack activates", 1, 0.8, 0.8)
+                GameTooltip:Show()
+            end)
+
+            rulesButton:SetScript("OnLeave", function(self)
+                GameTooltip:Hide()
+            end)
+
+            rulesButton:SetScript("OnClick", function(self)
+                MountieUI.ShowRulesDialog(pack)
+            end)
+            
+            -- Add click handler to collapse - this was the key issue
+            expandedContent:EnableMouse(true)
+            expandedContent:SetScript("OnMouseUp", function(self, button)
+                if button == "LeftButton" then
+                    -- Call toggle again, but it will detect we're expanded and collapse
+                    MountieUI.TogglePackExpansion(self, pack)
                 end
+            end)
+            
+            -- Show the frames
+            expandedContent:Show()
+            expandedScrollFrame:Show()
+            
+            -- Add the mounts
+            if #pack.mounts > 0 then
+                -- Create a sorted list of mounts by name
+                local sortedMounts = {}
+                for _, mountID in ipairs(pack.mounts) do
+                    local name = C_MountJournal.GetMountInfoByID(mountID)
+                    table.insert(sortedMounts, {
+                        id = mountID,
+                        name = name or "Unknown Mount"
+                    })
+                end
+                
+                -- Sort alphabetically by name
+                table.sort(sortedMounts, function(a, b) 
+                    return a.name < b.name 
+                end)
+                
+                local yOffset = -35 -- Start below the info text
+                for i, mountData in ipairs(sortedMounts) do
+                    local mountFrame = CreateFrame("Frame", nil, expandedContent)
+                    mountFrame:SetSize(280, 28)
+                    mountFrame:SetPoint("TOPLEFT", expandedContent, "TOPLEFT", 8, yOffset)
+                    
+                    -- Mount background
+                    local mountBg = mountFrame:CreateTexture(nil, "BACKGROUND")
+                    mountBg:SetAllPoints(mountFrame)
+                    mountBg:SetColorTexture(0.05, 0.05, 0.15, 0.6)
+                    
+                    -- Get mount info
+                    local name, spellID, icon = C_MountJournal.GetMountInfoByID(mountData.id)
+                    
+                    -- Mount icon
+                    local mountIcon = mountFrame:CreateTexture(nil, "ARTWORK")
+                    mountIcon:SetSize(24, 24)
+                    mountIcon:SetPoint("LEFT", mountFrame, "LEFT", 4, 0)
+                    mountIcon:SetTexture(icon)
+                    
+                    -- Mount name
+                    local mountName = mountFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    mountName:SetPoint("LEFT", mountIcon, "RIGHT", 6, 0)
+                    mountName:SetText(mountData.name)
+                    mountName:SetTextColor(0.9, 0.9, 0.9, 1)
+                    
+                    mountFrame:Show()
+                    expandedContent.mountFrames[i] = mountFrame
+                    yOffset = yOffset - 29 -- Move down for next mount
+                end
+                
+                -- Resize the content to fit all mounts
+                local contentHeight = 35 + (#sortedMounts * 29) + 10 -- header + mounts + padding
+                expandedContent:SetHeight(contentHeight)
+            else
+                -- No mounts
+                local noMountsText = expandedContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                noMountsText:SetPoint("TOPLEFT", info, "BOTTOMLEFT", 8, -4)
+                noMountsText:SetText("No mounts in this pack")
+                noMountsText:SetTextColor(0.6, 0.6, 0.6, 1)
+                expandedContent:SetHeight(80)
+            end
+            
+            -- Store reference to the scroll frame (not content)
+            packPanel.tempExpandedFrame = expandedScrollFrame
+            
+            if MountieDB and MountieDB.settings and MountieDB.settings.debugMode then
+                Mountie.Debug("Created scrollable expansion with " .. #pack.mounts .. " mounts")
             end
         end
     end
@@ -363,12 +570,52 @@ function MountieUI.CreatePackMountFrame(packFrame, mountID, index)
     end)
     
     removeButton:SetScript("OnClick", function(self)
+        Mountie.Debug("Remove button clicked for mount ID: " .. mountID)
+        
         local success, message = Mountie.RemoveMountFromPack(packFrame.pack.name, mountID)
-        print(message)
+        Mountie.VerbosePrint(message)
+        
         if success then
-            -- Refresh the entire pack panel to rebuild the layout cleanly
-            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
-                _G.MountieMainFrame.packPanel.refreshPacks()
+            Mountie.Debug("Mount removed successfully, updating UI in-place")
+            
+            -- Get the updated pack data
+            local updatedPack = Mountie.GetPack(packFrame.pack.name)
+            if updatedPack then
+                Mountie.Debug("Updated pack has " .. #updatedPack.mounts .. " mounts remaining")
+                
+                packFrame.pack = updatedPack -- Update the pack reference
+                
+                -- Remove this specific mount frame
+                mountFrame:Hide()
+                mountFrame:SetParent(nil)
+                
+                -- Remove from the mount frames list
+                for i, frame in ipairs(packFrame.mountFrames) do
+                    if frame == mountFrame then
+                        table.remove(packFrame.mountFrames, i)
+                        Mountie.Debug("Removed mount frame from list, " .. #packFrame.mountFrames .. " frames remaining")
+                        break
+                    end
+                end
+                
+                -- Reposition remaining mount frames
+                for i, frame in ipairs(packFrame.mountFrames) do
+                    frame:ClearAllPoints()
+                    if i == 1 then
+                        frame:SetPoint("TOPLEFT", packFrame.infoText, "BOTTOMLEFT", 8, -2)
+                    else
+                        frame:SetPoint("TOPLEFT", packFrame.mountFrames[i-1], "BOTTOMLEFT", 0, -1)
+                    end
+                end
+                
+                -- Update pack height
+                local baseHeight = 60
+                local newHeight
+                if #updatedPack.mounts > 0 then
+                    local mountsHeight = #updatedPack.mounts * 29 + 10
+                    newHeight = baseHeight + mountsHeight
+                    Mountie.Debug("Calculated new height: " .. newHeight)
+                end
             end
         end
     end)
@@ -386,6 +633,10 @@ function MountieUI.CreatePackMountFrame(packFrame, mountID, index)
             GameTooltip:SetText(name or "Unknown Mount", 1, 1, 1)
         end
         GameTooltip:Show()
+        
+        -- Show mount model in flyout window
+        local mountData = { id = mountID, name = name, spellID = spellID }
+        MountieUI.ShowMountModelFlyout(mountData)
     end)
     
     mountFrame:SetScript("OnLeave", function(self)
@@ -393,6 +644,8 @@ function MountieUI.CreatePackMountFrame(packFrame, mountID, index)
         bg:SetColorTexture(0.05, 0.05, 0.15, 0.6)
         mountName:SetTextColor(0.9, 0.9, 0.9, 1)
         GameTooltip:Hide()
+        -- Hide mount model flyout
+        MountieUI.HideMountModelFlyout()
     end)
     
     return mountFrame
@@ -452,4 +705,4 @@ function MountieUI.IsMountBeingDragged()
     return false
 end
 
-print("UI/PackPanel.lua loaded")
+Mountie.Debug("UI/PackPanel.lua loaded")

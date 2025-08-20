@@ -10,6 +10,8 @@ end
 
 -- Build the visible list of rules inside the dialog
 local function RebuildRulesList(container, pack)
+    Mountie.Debug("RebuildRulesList called for pack: " .. (pack.name or "unknown"))
+    
     -- clear
     if container.ruleRows then
         for _, row in ipairs(container.ruleRows) do
@@ -20,6 +22,8 @@ local function RebuildRulesList(container, pack)
     container.ruleRows = {}
 
     EnsureConditions(pack)
+    Mountie.Debug("Pack has " .. #pack.conditions .. " conditions")
+    
     local y = -10
     for i, rule in ipairs(pack.conditions) do
         local row = CreateFrame("Frame", nil, container)
@@ -47,7 +51,7 @@ local function RebuildRulesList(container, pack)
         del:SetText("X")
         del:SetScript("OnClick", function()
             if Mountie.TableRemoveByIndex(pack.conditions, i) then
-                Mountie.Print("Removed rule.")
+                Mountie.VerbosePrint("Removed rule.")
                 RebuildRulesList(container, pack)
                 -- Refresh the pack panel to show updated rule count
                 if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
@@ -57,6 +61,8 @@ local function RebuildRulesList(container, pack)
         end)
 
         container.ruleRows[#container.ruleRows+1] = row
+        row:Show() -- Explicitly show the row
+        Mountie.Debug("Created rule row " .. i .. ": " .. text:GetText())
         y = y - 24
     end
 
@@ -78,11 +84,31 @@ local function RebuildRulesList(container, pack)
             scrollFrame:SetVerticalScroll(0)
         end
     end
+    
+    Mountie.Debug("RebuildRulesList completed, created " .. #container.ruleRows .. " rule rows")
+    
+    -- Force a UI update to ensure everything renders
+    if container.GetParent and container:GetParent() then
+        local parent = container:GetParent()
+        if parent.GetParent and parent:GetParent() then
+            local grandparent = parent:GetParent()
+            if grandparent.Show then
+                -- Force the dialog to refresh its layout
+                C_Timer.After(0.01, function()
+                    container:Show()
+                    if scrollFrame then scrollFrame:Show() end
+                end)
+            end
+        end
+    end
 end
 
 -- Public API
 function MountieUI.ShowRulesDialog(pack)
+    Mountie.Debug("ShowRulesDialog called for pack: " .. (pack and pack.name or "nil"))
+    
     if not rulesDialog then
+        Mountie.Debug("Creating new rules dialog")
         local dlg = CreateFrame("Frame", "MountieRulesDialog", UIParent, "BasicFrameTemplateWithInset")
         dlg:SetSize(420, 400) -- Increased height for transmog controls
         dlg:SetPoint("CENTER")
@@ -105,7 +131,7 @@ function MountieUI.ShowRulesDialog(pack)
 
         -- Current zone display
         local zoneLabel = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        zoneLabel:SetPoint("TOPLEFT", dlg.packNameText, "BOTTOMLEFT", 0, -10)
+        zoneLabel:SetPoint("TOPLEFT", dlg.packNameText, "BOTTOMLEFT", 0, -15)
         zoneLabel:SetText("Current Zone:")
 
         local zoneText = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -119,10 +145,10 @@ function MountieUI.ShowRulesDialog(pack)
         parentCheck.text:SetPoint("LEFT", parentCheck, "RIGHT", 4, 0)
         parentCheck.text:SetText("Also match parent zones (continent/region)")
 
-        -- Add Current Zone button
+        -- Zone buttons row
         local addCurrentBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
         addCurrentBtn:SetSize(120, 22)
-        addCurrentBtn:SetPoint("LEFT", parentCheck.text, "RIGHT", 10, 0)
+        addCurrentBtn:SetPoint("TOPLEFT", parentCheck, "BOTTOMLEFT", 0, -10)
         addCurrentBtn:SetText("Add Current Zone")
         addCurrentBtn:SetScript("OnClick", function()
             if not dlg.targetPack then return end
@@ -137,7 +163,7 @@ function MountieUI.ShowRulesDialog(pack)
                 mapID = mapID,
                 includeParents = parentCheck:GetChecked() and true or false,
             })
-            Mountie.Print("Added zone rule.")
+            Mountie.VerbosePrint("Added zone rule.")
             RebuildRulesList(dlg.rulesList, dlg.targetPack)
             -- Immediately re-evaluate active pack
             C_Timer.After(0.1, Mountie.SelectActivePack)
@@ -147,10 +173,9 @@ function MountieUI.ShowRulesDialog(pack)
             end
         end)
 
-        -- Browse Zones button
         local browseBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
         browseBtn:SetSize(100, 22)
-        browseBtn:SetPoint("TOP", addCurrentBtn, "BOTTOM", 0, 0)
+        browseBtn:SetPoint("LEFT", addCurrentBtn, "RIGHT", 10, 0)
         browseBtn:SetText("Browse Zones")
         browseBtn:SetScript("OnClick", function()
             if dlg.zonePicker then
@@ -161,23 +186,23 @@ function MountieUI.ShowRulesDialog(pack)
             end
         end)
 
-        -- Current transmog display
+        -- Current transmog display (moved down with more spacing)
         local transmogLabel = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        transmogLabel:SetPoint("TOPLEFT", addCurrentBtn, "BOTTOMLEFT", -110, -10)
+        transmogLabel:SetPoint("TOPLEFT", addCurrentBtn, "BOTTOMLEFT", 0, -20)
         transmogLabel:SetText("Current Transmog:")
 
         local transmogText = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         transmogText:SetPoint("LEFT", transmogLabel, "RIGHT", 8, 0)
         transmogText:SetText("None detected")
 
-        -- Add Current Transmog button
+        -- Transmog buttons row (properly spaced below transmog label)
         local addTransmogBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
         addTransmogBtn:SetSize(130, 22)
-        addTransmogBtn:SetPoint("LEFT", transmogText, "RIGHT", 10, 0)
+        addTransmogBtn:SetPoint("TOPLEFT", transmogLabel, "BOTTOMLEFT", 0, -10)
         addTransmogBtn:SetText("Add Current Transmog")
         addTransmogBtn:SetScript("OnClick", function()
             if not dlg.targetPack then return end
-            local setID = GetCurrentTransmogSetID()
+            local setID = Mountie.GetCurrentTransmogSetID()
             if not setID then
                 Mountie.Print("No transmog set detected. Wear more pieces of a set.")
                 return
@@ -192,7 +217,7 @@ function MountieUI.ShowRulesDialog(pack)
             
             local setInfo = Mountie.GetTransmogSetInfo(setID)
             local setName = setInfo and setInfo.name or ("Set " .. setID)
-            Mountie.Print("Added transmog rule: " .. setName)
+            Mountie.VerbosePrint("Added transmog rule: " .. setName)
             
             RebuildRulesList(dlg.rulesList, dlg.targetPack)
             C_Timer.After(0.1, Mountie.SelectActivePack)
@@ -203,10 +228,9 @@ function MountieUI.ShowRulesDialog(pack)
             end
         end)
 
-        -- Browse Transmog Sets button
         local browseTransmogBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
         browseTransmogBtn:SetSize(130, 22)
-        browseTransmogBtn:SetPoint("TOP", addTransmogBtn, "BOTTOM", 0, 0)
+        browseTransmogBtn:SetPoint("LEFT", addTransmogBtn, "RIGHT", 10, 0)
         browseTransmogBtn:SetText("Browse Transmog Sets")
         browseTransmogBtn:SetScript("OnClick", function()
             if dlg.transmogPicker then
@@ -217,9 +241,9 @@ function MountieUI.ShowRulesDialog(pack)
             end
         end)
 
-        -- Rules list container
+        -- Rules list container (moved down with proper spacing)
         local listLabel = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        listLabel:SetPoint("TOPLEFT", transmogLabel, "BOTTOMLEFT", 0, -16)
+        listLabel:SetPoint("TOPLEFT", addTransmogBtn, "BOTTOMLEFT", 0, -20)
         listLabel:SetText("Rules for this pack:")
 
         local rulesScroll = CreateFrame("ScrollFrame", nil, dlg, "UIPanelScrollFrameTemplate")
@@ -244,12 +268,14 @@ function MountieUI.ShowRulesDialog(pack)
 
         -- OnShow: refresh current zone and transmog info and list
         dlg:SetScript("OnShow", function(self)
+            Mountie.Debug("Rules dialog OnShow called")
+            
             local mapID = C_Map.GetBestMapForUnit("player")
             local mi = mapID and C_Map.GetMapInfo(mapID) or nil
             self.zoneText:SetText(mi and (mi.name .. " (ID " .. mapID .. ")") or "Unknown")
             
             -- Update current transmog display
-            local currentSetID = GetCurrentTransmogSetID()
+            local currentSetID = Mountie.GetCurrentTransmogSetID()
             if currentSetID then
                 local setInfo = Mountie.GetTransmogSetInfo(currentSetID)
                 local setName = setInfo and setInfo.name or ("Set " .. currentSetID)
@@ -261,16 +287,31 @@ function MountieUI.ShowRulesDialog(pack)
             end
             
             if self.targetPack then
+                Mountie.Debug("Target pack found: " .. self.targetPack.name)
                 self.packNameText:SetText(self.targetPack.name)
                 RebuildRulesList(self.rulesList, self.targetPack)
+            else
+                Mountie.Debug("No target pack found!")
             end
         end)
 
         rulesDialog = dlg
     end
 
+    Mountie.Debug("Setting target pack and showing dialog")
     rulesDialog.targetPack = pack
     rulesDialog:Show()
+    
+    -- Force initial rules list update if this is the first time showing
+    -- (OnShow might not fire on initial creation)
+    if pack then
+        C_Timer.After(0.01, function()
+            if rulesDialog.targetPack and rulesDialog:IsShown() then
+                Mountie.Debug("Forcing initial RebuildRulesList")
+                RebuildRulesList(rulesDialog.rulesList, rulesDialog.targetPack)
+            end
+        end)
+    end
 end
 
 -- Zone Picker Dialog
@@ -733,7 +774,7 @@ function MountieUI.CreateZonePicker(parentDialog)
             
             local mapInfo = C_Map.GetMapInfo(picker.selectedMapID)
             local zoneName = mapInfo and mapInfo.name or ("MapID " .. picker.selectedMapID)
-            Mountie.Print("Added zone rule: " .. zoneName)
+            Mountie.VerbosePrint("Added zone rule: " .. zoneName)
             
             RebuildRulesList(parentDialog.rulesList, parentDialog.targetPack)
             C_Timer.After(0.1, Mountie.SelectActivePack)
@@ -795,7 +836,7 @@ function MountieUI.CreateTransmogPicker(parentDialog)
     filterLabel:SetText("Expansion:")
 
     local expansionFilter = CreateFrame("Frame", nil, picker, "UIDropDownMenuTemplate")
-    expansionFilter:SetPoint("LEFT", filterLabel, "RIGHT", 5, 0)
+    expansionFilter:SetPoint("LEFT", filterLabel, "RIGHT", 5, -2)
     expansionFilter:SetSize(120, 20)
 
     -- Collection filter
@@ -1046,7 +1087,7 @@ function MountieUI.CreateTransmogPicker(parentDialog)
 
             local setInfo = Mountie.GetTransmogSetInfo(picker.selectedSetID)
             local setName = setInfo and setInfo.name or ("Set " .. picker.selectedSetID)
-            Mountie.Print("Added transmog rule: " .. setName)
+            Mountie.VerbosePrint("Added transmog rule: " .. setName)
 
             RebuildRulesList(parentDialog.rulesList, parentDialog.targetPack)
             C_Timer.After(0.1, Mountie.SelectActivePack)

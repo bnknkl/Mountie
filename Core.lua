@@ -21,8 +21,9 @@ function Mountie.CreatePack(name, description)
 
     Mountie.Debug("CreatePack called with name: " .. name)
 
-    -- Check if pack already exists
-    for _, pack in ipairs(MountieDB.packs) do
+    -- Check if pack already exists for this character
+    local packs = Mountie.GetCharacterPacks()
+    for _, pack in ipairs(packs) do
         if pack.name == name then
             return false, "Pack '" .. name .. "' already exists"
         end
@@ -36,15 +37,18 @@ function Mountie.CreatePack(name, description)
         created = time(),
     }
 
-    table.insert(MountieDB.packs, newPack)
-    Mountie.Debug("Pack added. Total packs: " .. #MountieDB.packs)
+    table.insert(packs, newPack)
+    Mountie.SetCharacterPacks(packs)
+    Mountie.VerbosePrint("Pack added. Total packs: " .. #packs)
     return true, "Pack '" .. name .. "' created successfully"
 end
 
 function Mountie.DeletePack(name)
-    for i, pack in ipairs(MountieDB.packs) do
+    local packs = Mountie.GetCharacterPacks()
+    for i, pack in ipairs(packs) do
         if pack.name == name then
-            table.remove(MountieDB.packs, i)
+            table.remove(packs, i)
+            Mountie.SetCharacterPacks(packs)
             Mountie.Debug("Deleted pack: " .. name)
             return true, "Pack '" .. name .. "' deleted"
         end
@@ -53,7 +57,8 @@ function Mountie.DeletePack(name)
 end
 
 function Mountie.GetPack(name)
-    for _, pack in ipairs(MountieDB.packs) do
+    local packs = Mountie.GetCharacterPacks()
+    for _, pack in ipairs(packs) do
         if pack.name == name then
             return pack
         end
@@ -62,7 +67,7 @@ function Mountie.GetPack(name)
 end
 
 function Mountie.ListPacks()
-    return MountieDB.packs
+    return Mountie.GetCharacterPacks()
 end
 
 -- Mount Management Functions
@@ -88,7 +93,7 @@ function Mountie.AddMountToPack(packName, mountID)
     end
 
     table.insert(pack.mounts, mountID)
-    Mountie.Debug("Added mount " .. name .. " to pack " .. packName)
+    Mountie.VerbosePrint("Added mount " .. name .. " to pack " .. packName)
     return true, "Added '" .. name .. "' to pack '" .. packName .. "'"
 end
 
@@ -102,7 +107,7 @@ function Mountie.RemoveMountFromPack(packName, mountID)
         if existingID == mountID then
             table.remove(pack.mounts, i)
             local name = C_MountJournal.GetMountInfoByID(mountID)
-            Mountie.Debug("Removed mount " .. (name or "Unknown") .. " from pack " .. packName)
+            Mountie.VerbosePrint("Removed mount " .. (name or "Unknown") .. " from pack " .. packName)
             return true, "Removed mount from pack '" .. packName .. "'"
         end
     end
@@ -224,40 +229,52 @@ local function BuildTransmogSetCache()
     
     -- Get all sets
     local allSets = C_TransmogSets.GetAllSets()
+    if not allSets then
+        Mountie.Debug("No transmog sets available from API")
+        return
+    end
     
     for _, setInfo in ipairs(allSets) do
         if setInfo.setID and setInfo.name then
-            -- Get the appearances for this set
+            -- Get the appearances for this set using the correct API
             local setAppearances = {}
-            local sources = C_TransmogSets.GetSetSources(setInfo.setID)
             
-            for _, sourceInfo in ipairs(sources) do
-                if sourceInfo.appearanceID and sourceInfo.invType then
-                    -- Convert invType to slot ID for comparison
-                    local slotID = nil
-                    if sourceInfo.invType == "INVTYPE_HEAD" then slotID = 1
-                    elseif sourceInfo.invType == "INVTYPE_SHOULDER" then slotID = 3
-                    elseif sourceInfo.invType == "INVTYPE_CHEST" or sourceInfo.invType == "INVTYPE_ROBE" then slotID = 5
-                    elseif sourceInfo.invType == "INVTYPE_WAIST" then slotID = 6
-                    elseif sourceInfo.invType == "INVTYPE_LEGS" then slotID = 7
-                    elseif sourceInfo.invType == "INVTYPE_FEET" then slotID = 8
-                    elseif sourceInfo.invType == "INVTYPE_WRIST" then slotID = 9
-                    elseif sourceInfo.invType == "INVTYPE_HAND" then slotID = 10
-                    elseif sourceInfo.invType == "INVTYPE_CLOAK" then slotID = 15
-                    end
-                    
-                    if slotID then
-                        setAppearances[slotID] = sourceInfo.appearanceID
+            -- Try the primary appearances API first
+            local sourceIDs = C_TransmogSets.GetSetPrimaryAppearances(setInfo.setID)
+            
+            if sourceIDs and type(sourceIDs) == "table" then
+                for _, sourceInfo in ipairs(sourceIDs) do
+                    if sourceInfo and sourceInfo.appearanceID and sourceInfo.invType then
+                        -- Convert invType to slot ID for comparison
+                        local slotID = nil
+                        if sourceInfo.invType == "INVTYPE_HEAD" then slotID = 1
+                        elseif sourceInfo.invType == "INVTYPE_SHOULDER" then slotID = 3
+                        elseif sourceInfo.invType == "INVTYPE_CHEST" or sourceInfo.invType == "INVTYPE_ROBE" then slotID = 5
+                        elseif sourceInfo.invType == "INVTYPE_WAIST" then slotID = 6
+                        elseif sourceInfo.invType == "INVTYPE_LEGS" then slotID = 7
+                        elseif sourceInfo.invType == "INVTYPE_FEET" then slotID = 8
+                        elseif sourceInfo.invType == "INVTYPE_WRIST" then slotID = 9
+                        elseif sourceInfo.invType == "INVTYPE_HAND" then slotID = 10
+                        elseif sourceInfo.invType == "INVTYPE_CLOAK" then slotID = 15
+                        end
+                        
+                        if slotID then
+                            setAppearances[slotID] = sourceInfo.appearanceID
+                        end
                     end
                 end
+            else
+                -- If primary appearances API doesn't work, we'll store the set anyway
+                -- but without detailed appearance data (transmog detection will be basic)
+                Mountie.Debug("Could not get appearance data for set: " .. setInfo.name)
             end
             
             transmogSetCache[setInfo.setID] = {
                 name = setInfo.name,
                 appearances = setAppearances,
-                expansionID = setInfo.expansionID,
-                classMask = setInfo.classMask,
-                collected = setInfo.collected
+                expansionID = setInfo.expansionID or 0,
+                classMask = setInfo.classMask or 0,
+                collected = setInfo.collected or false
             }
         end
     end
@@ -271,7 +288,27 @@ local function GetCurrentAppearances()
     local slots = {1, 3, 5, 6, 7, 8, 9, 10, 15} -- Head, Shoulder, Chest, Waist, Legs, Feet, Wrist, Hands, Back
     
     for _, slotID in ipairs(slots) do
-        local appearanceID, secondaryAppearanceID = C_TransmogCollection.GetSlotVisualInfo(slotID)
+        -- Try multiple API approaches for getting appearance data
+        local appearanceID = nil
+        
+        -- Method 1: Try C_TransmogCollection.GetSlotInfo (this is likely the correct modern API)
+        if C_TransmogCollection and C_TransmogCollection.GetSlotInfo then
+            local success, slotInfo = pcall(C_TransmogCollection.GetSlotInfo, slotID)
+            if success and slotInfo and slotInfo.appearanceID then
+                appearanceID = slotInfo.appearanceID
+            end
+        end
+        
+        -- Method 2: Try the older API if the first doesn't work
+        if not appearanceID and C_TransmogCollection and C_TransmogCollection.GetSlotVisualInfo then
+            local success, tempAppearanceID = pcall(C_TransmogCollection.GetSlotVisualInfo, slotID)
+            if success and tempAppearanceID then
+                appearanceID = tempAppearanceID
+            end
+        end
+        
+        -- Skip Method 3 for now as it's causing the error
+        
         if appearanceID and appearanceID ~= 0 then
             appearances[slotID] = appearanceID
         end
@@ -281,31 +318,32 @@ local function GetCurrentAppearances()
 end
 
 -- Enhanced current transmog set detection
-local function GetCurrentTransmogSetID()
+function Mountie.GetCurrentTransmogSetID()
     local currentTime = GetTime()
     if currentTime - lastTransmogCheck < TRANSMOG_CHECK_INTERVAL then
         return Mountie.runtime.cachedTransmogSetID
     end
-
+    
     lastTransmogCheck = currentTime
-
+    
     -- Build cache if needed
     BuildTransmogSetCache()
-
+    
     -- Get current appearances
     local currentAppearances = GetCurrentAppearances()
-
+    
     -- Find best matching set
     local bestMatch = nil
     local bestMatchScore = 0
     local minPiecesForMatch = 3 -- At least 3 pieces must match
-
+    
     for setID, setData in pairs(transmogSetCache) do
         -- Only check sets available to this character's class
         local playerClass = select(2, UnitClass("player"))
         local classMask = setData.classMask or 0
-
-        local skip = false
+        
+        -- Skip sets not available to this class (if classMask is set)
+        local skipThisSet = false
         if classMask > 0 then
             local classTable = {
                 WARRIOR = 1, PALADIN = 2, HUNTER = 3, ROGUE = 4, PRIEST = 5,
@@ -314,25 +352,25 @@ local function GetCurrentTransmogSetID()
             }
             local classFlag = classTable[playerClass]
             if classFlag and bit.band(classMask, bit.lshift(1, classFlag - 1)) == 0 then
-                skip = true
+                skipThisSet = true -- Skip this set
             end
         end
-
-        if not skip then
+        
+        if not skipThisSet then
             -- Count matching pieces
             local matchingPieces = 0
             local totalSetPieces = 0
-
+            
             for slotID, setAppearanceID in pairs(setData.appearances) do
                 totalSetPieces = totalSetPieces + 1
                 if currentAppearances[slotID] == setAppearanceID then
                     matchingPieces = matchingPieces + 1
                 end
             end
-
+            
             -- Calculate match score (percentage of set pieces worn)
             local matchScore = totalSetPieces > 0 and (matchingPieces / totalSetPieces) or 0
-
+            
             -- Require minimum pieces and minimum percentage
             if matchingPieces >= minPiecesForMatch and matchScore > bestMatchScore and matchScore >= 0.5 then
                 bestMatchScore = matchScore
@@ -340,15 +378,15 @@ local function GetCurrentTransmogSetID()
             end
         end
     end
-
+    
     -- Cache the result
     Mountie.runtime.cachedTransmogSetID = bestMatch
-
+    
     if bestMatch and MountieDB.settings.debugMode then
         local setName = transmogSetCache[bestMatch].name
         Mountie.Debug("Detected transmog set: " .. setName .. " (ID: " .. bestMatch .. ", " .. math.floor(bestMatchScore * 100) .. "% match)")
     end
-
+    
     return bestMatch
 end
 
@@ -358,18 +396,37 @@ function Mountie.GetTransmogSetInfo(setID)
     return transmogSetCache[setID]
 end
 
--- Get all available transmog sets (for UI)
+-- Get all available transmog sets (for UI) - filtered by current character's class
 function Mountie.GetAllTransmogSets()
     BuildTransmogSetCache()
     
     local sets = {}
+    local playerClass = select(2, UnitClass("player"))
+    
+    -- Class bit flags for transmog sets
+    local classTable = {
+        WARRIOR = 1, PALADIN = 2, HUNTER = 3, ROGUE = 4, PRIEST = 5,
+        DEATHKNIGHT = 6, SHAMAN = 7, MAGE = 8, WARLOCK = 9, MONK = 10,
+        DRUID = 11, DEMONHUNTER = 12, EVOKER = 13
+    }
+    local playerClassFlag = classTable[playerClass]
+    
     for setID, setData in pairs(transmogSetCache) do
-        table.insert(sets, {
-            setID = setID,
-            name = setData.name,
-            expansionID = setData.expansionID,
-            collected = setData.collected
-        })
+        -- Filter by class availability
+        local isAvailableToClass = true
+        if setData.classMask and setData.classMask > 0 and playerClassFlag then
+            -- Check if this class can use this set
+            isAvailableToClass = bit.band(setData.classMask, bit.lshift(1, playerClassFlag - 1)) ~= 0
+        end
+        
+        if isAvailableToClass then
+            table.insert(sets, {
+                setID = setID,
+                name = setData.name,
+                expansionID = setData.expansionID,
+                collected = setData.collected
+            })
+        end
     end
     
     -- Sort by expansion and name
@@ -414,7 +471,7 @@ local function DoesRuleMatch(rule)
         
     elseif rule.type == "transmog" then
         if not rule.setID then return false, 0 end
-        local currentSetID = GetCurrentTransmogSetID()
+        local currentSetID = Mountie.GetCurrentTransmogSetID()
         if currentSetID == rule.setID then
             return true, priority
         end
@@ -766,7 +823,7 @@ local function OnTransmogChanged()
     
     -- Re-evaluate active packs after a short delay
     C_Timer.After(0.5, function()
-        GetCurrentTransmogSetID() -- Update cache
+        Mountie.GetCurrentTransmogSetID() -- Update cache
         Mountie.SelectActivePack()
     end)
 end
@@ -829,7 +886,7 @@ local function SlashHandler(msg)
         C_Timer.After(0.1, Mountie.SelectActivePack)
 
     elseif command == "transmog" then
-        local currentSetID = GetCurrentTransmogSetID()
+        local currentSetID = Mountie.GetCurrentTransmogSetID()
         if currentSetID then
             local setInfo = Mountie.GetTransmogSetInfo(currentSetID)
             local setName = setInfo and setInfo.name or ("Set " .. currentSetID)
@@ -866,6 +923,17 @@ local function SlashHandler(msg)
             end
         end
 
+    elseif command == "characters" then
+        if not MountieDB.characters or not next(MountieDB.characters) then
+            Mountie.Print("No character data found.")
+        else
+            Mountie.Print("Mountie data across characters:")
+            for charKey, charData in pairs(MountieDB.characters) do
+                local packCount = charData.packs and #charData.packs or 0
+                Mountie.Print("- " .. charKey .. ": " .. packCount .. " pack" .. (packCount == 1 and "" or "s"))
+            end
+        end
+
     elseif command == "rebuild-transmog" then
         -- Clear transmog cache and rebuild
         transmogSetCache = {}
@@ -878,8 +946,12 @@ local function SlashHandler(msg)
 
     elseif command == "status" then
         EnsureFlyingPreferenceSetting()
+        local packs = Mountie.GetCharacterPacks()
+        local charKey = UnitName("player") .. "-" .. GetRealmName()
         Mountie.Print("Status:")
-        Mountie.Print("- Total packs: " .. #MountieDB.packs)
+        Mountie.Print("- Character: " .. charKey)
+        Mountie.Print("- Total packs: " .. #packs)
+        Mountie.Print("- Verbose mode: " .. (MountieDB.settings.verboseMode and "ON" or "OFF"))
         Mountie.Print("- Debug mode: " .. (MountieDB.settings.debugMode and "ON" or "OFF"))
         Mountie.Print("- Flying preference: " .. (MountieDB.settings.preferFlyingMounts and "ON" or "OFF"))
         Mountie.Print("- Overlap mode: " .. (MountieDB.settings.packOverlapMode or "priority"))
@@ -916,7 +988,7 @@ local function SlashHandler(msg)
         Mountie.Print(message)
 
     elseif command == "list" then
-        local packs = Mountie.ListPacks()
+        local packs = Mountie.GetCharacterPacks()
         if #packs == 0 then
             Mountie.Print("No packs created yet. Use /mountie create <n> to make one!")
         else
@@ -1034,12 +1106,63 @@ local function SlashHandler(msg)
             Mountie.Print("Try creating a pack or favoriting a mount first.")
         end
 
+    elseif command == "debug-mount-types" then
+        MountieUI.DebugMountTypes()
+
+    elseif command == "debug-faction-mounts" then
+        MountieUI.DebugFactionMounts()
+    
+    elseif command == "verbose-on" then
+        MountieDB.settings.verboseMode = true
+        Mountie.Print("Verbose mode: ON")
+
+    elseif command == "verbose-off" then
+        MountieDB.settings.verboseMode = false
+        Mountie.Print("Verbose mode: OFF")
+    
+    elseif command == "test-scroll" then
+        if not _G.MountieMainFrame then
+            Mountie.Print("Open Mountie UI first")
+            return
+        end
+        
+        local packPanel = _G.MountieMainFrame.packPanel
+        if not packPanel then
+            Mountie.Print("Pack panel not found")
+            return
+        end
+        
+        -- Create a simple red test frame at the very top
+        local testFrame = CreateFrame("Frame", nil, packPanel)
+        testFrame:SetSize(300, 50)
+        testFrame:SetPoint("TOPLEFT", packPanel, "TOPLEFT", 20, -80) -- Same position as the scroll frame
+        
+        local bg = testFrame:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints(testFrame)
+        bg:SetColorTexture(1, 0, 0, 0.8) -- Bright red
+        
+        local text = testFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        text:SetPoint("CENTER", testFrame, "CENTER", 0, 0)
+        text:SetText("TEST FRAME - TOP OF PACK PANEL")
+        text:SetTextColor(1, 1, 1, 1)
+        
+        testFrame:Show()
+        
+        Mountie.Print("Created red test frame at top of pack panel")
+        
+        -- Auto-hide after 5 seconds
+        C_Timer.After(5, function()
+            testFrame:Hide()
+            testFrame:SetParent(nil)
+        end)
+
     else
         Mountie.Print("Mountie Commands:")
         Mountie.Print("/mountie (or /mountie ui) - Open main window")
         Mountie.Print("/mountie create <n> [description] - Create a new pack")
         Mountie.Print("/mountie delete <n> - Delete a pack")
-        Mountie.Print("/mountie list - Show all packs")
+        Mountie.Print("/mountie list - Show all packs for this character")
+        Mountie.Print("/mountie characters - Show pack count across all characters")
         Mountie.Print("/mountie show <n> - Show mounts in a pack")
         Mountie.Print("/mountie add <pack> <mount_id> - Add mount to pack")
         Mountie.Print("/mountie remove <pack> <mount_id> - Remove mount from pack")
@@ -1050,6 +1173,17 @@ local function SlashHandler(msg)
         Mountie.Print("/mountie packs-status - Show matching packs and scores")
         Mountie.Print("/mountie overlap-priority/intersection - Set overlap mode")
         Mountie.Print("/mountie flying-on/off - Toggle flying mount preference")
+        Mountie.Print("/mountie verbose-on/off - Toggle verbose output")
+        
+        -- Only show debug commands if debug mode is enabled
+        if MountieDB.settings.debugMode then
+            Mountie.Print("---")
+            Mountie.Print("Debug Commands (debug mode enabled):")
+            Mountie.Print("/mountie debug-on/off - Toggle debug mode")
+            Mountie.Print("/mountie debug-mount-types - Analyze mount type IDs")
+            Mountie.Print("/mountie debug-faction-mounts - Analyze faction filtering")
+            Mountie.Print("/mountie rebuild-transmog - Rebuild transmog cache")
+        end
     end
 end
 
