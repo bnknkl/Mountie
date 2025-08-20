@@ -59,7 +59,7 @@ function MountieUI.CreatePackDialog()
         end
 
         local success, message = Mountie.CreatePack(packName, description)
-        Mountie.Print(message)
+        Mountie.VerbosePrint(message)
 
         if success then
             dialog:Hide()
@@ -143,7 +143,7 @@ function MountieUI.CreateDeleteConfirmationDialog()
     deleteButton:SetScript("OnClick", function()
         if dialog.targetPack then
             local success, message = Mountie.DeletePack(dialog.targetPack.name)
-            Mountie.Print(message)
+            Mountie.VerbosePrint(message)
             if success then
                 dialog:Hide()
                 if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
