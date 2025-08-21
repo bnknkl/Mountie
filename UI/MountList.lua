@@ -87,6 +87,13 @@ function MountieUI.CreateMountButton(parent, index)
 
     button:SetScript("OnEnter", function(self)
         self:SetBackdropColor(0.2, 0.2, 0.2, 0.8)
+        
+        -- Cancel any pending hide timer
+        if self.hideTimer then
+            self.hideTimer:Cancel()
+            self.hideTimer = nil
+        end
+        
         if self.mountData then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             local spellID = self.mountData.spellID
@@ -104,8 +111,31 @@ function MountieUI.CreateMountButton(parent, index)
     button:SetScript("OnLeave", function(self)
         self:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
         GameTooltip:Hide()
-        -- Hide mount model flyout
-        MountieUI.HideMountModelFlyout()
+        -- Hide flyouts with delay for smooth transition to flyouts
+        self.hideTimer = C_Timer.After(0.5, function()
+            -- Clear the timer reference
+            self.hideTimer = nil
+            
+            -- Double-check that mouse is actually away from the button
+            if self:IsMouseOver() then
+                return -- Still over the button, don't hide
+            end
+            
+            local modelFlyout = _G.MountieMountModelFlyout
+            local debugFlyout = _G.MountieMountDebugFlyout
+            local shouldHide = true
+            
+            if modelFlyout and modelFlyout:IsShown() and modelFlyout.isMouseOver then
+                shouldHide = false
+            end
+            if debugFlyout and debugFlyout:IsShown() and debugFlyout.isMouseOver then
+                shouldHide = false
+            end
+            
+            if shouldHide then
+                MountieUI.HideMountModelFlyout()
+            end
+        end)
     end)
 
     button:SetScript("OnDragStart", function(self)
@@ -718,7 +748,29 @@ function MountieUI.CreateMountModelFlyout()
     flyout.modelFrame = modelFrame
     flyout.nameLabel = nameLabel
     flyout.rotationTimer = nil
+    flyout.isMouseOver = false
     flyout:Hide()
+    
+    -- Add mouse tracking for persistence
+    flyout:EnableMouse(true)
+    flyout:SetScript("OnEnter", function(self)
+        self.isMouseOver = true
+        -- Cancel any pending hide timers from the flyouts
+        if self.hideTimer then
+            self.hideTimer:Cancel()
+            self.hideTimer = nil
+        end
+    end)
+    flyout:SetScript("OnLeave", function(self)
+        self.isMouseOver = false
+        -- Hide if not moving to debug flyout
+        self.hideTimer = C_Timer.After(0.1, function()
+            self.hideTimer = nil
+            if not self.isMouseOver and (not mountDebugFlyout or not mountDebugFlyout.isMouseOver) then
+                MountieUI.HideMountModelFlyout()
+            end
+        end)
+    end)
     
     mountModelFlyout = flyout
     return flyout
@@ -772,7 +824,29 @@ function MountieUI.CreateMountDebugFlyout()
     flyout.title = title
     flyout.debugText = debugText
     flyout.content = content
+    flyout.isMouseOver = false
     flyout:Hide()
+    
+    -- Add mouse tracking for persistence
+    flyout:EnableMouse(true)
+    flyout:SetScript("OnEnter", function(self)
+        self.isMouseOver = true
+        -- Cancel any pending hide timers from the flyouts
+        if self.hideTimer then
+            self.hideTimer:Cancel()
+            self.hideTimer = nil
+        end
+    end)
+    flyout:SetScript("OnLeave", function(self)
+        self.isMouseOver = false
+        -- Hide immediately when leaving debug flyout
+        self.hideTimer = C_Timer.After(0.1, function()
+            self.hideTimer = nil
+            if not self.isMouseOver then
+                MountieUI.HideMountModelFlyout()
+            end
+        end)
+    end)
     
     mountDebugFlyout = flyout
     return flyout
@@ -783,7 +857,11 @@ function MountieUI.ShowMountModelFlyout(mountData)
         return
     end
     
+    -- Don't recreate if already showing the same mount
     local flyout = MountieUI.CreateMountModelFlyout()
+    if flyout:IsShown() and flyout.currentMountID == mountData.id then
+        return
+    end
     
     -- Position flyout to the left of the main frame
     if _G.MountieMainFrame and _G.MountieMainFrame:IsShown() then
@@ -794,8 +872,9 @@ function MountieUI.ShowMountModelFlyout(mountData)
         flyout:SetPoint("CENTER", UIParent, "CENTER", -400, 0)
     end
     
-    -- Set mount name
+    -- Set mount name and track current mount
     flyout.nameLabel:SetText(mountData.name or "Unknown Mount")
+    flyout.currentMountID = mountData.id
     
     -- Set the mount model using PlayerModel methods
     local creatureDisplayInfoID = C_MountJournal.GetMountInfoExtraByID(mountData.id)

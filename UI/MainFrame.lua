@@ -3,6 +3,8 @@ Mountie.Debug("UI/MainFrame.lua loading...")
 
 local mainFrame = nil
 
+local version = "0.5.5"
+
 function MountieUI.CreateSettingsPanel(parent)
     local settingsPanel = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     settingsPanel:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 20, 20)
@@ -134,6 +136,12 @@ function MountieUI.CreateMainFrame()
     macroInstructions:SetPoint("BOTTOM", settingsPanel, "BOTTOM", 0, -11) -- Below the settings panel
     macroInstructions:SetText("Create a macro with |cff00ff00/mountie mount|r and add it to your action bar!")
     macroInstructions:SetTextColor(0.8, 0.8, 0.8, 1)
+    
+    -- Add version number in bottom right corner
+    local versionText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    versionText:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 5)
+    versionText:SetText("v" .. version)
+    versionText:SetTextColor(0.6, 0.6, 0.6, 0.8)
 
     -- Left panel (mounts)
     local mountPanel = CreateFrame("Frame", nil, frame, "BackdropTemplate")
@@ -311,11 +319,10 @@ function MountieUI.CreateMainFrame()
     UIDropDownMenu_SetText(filterDropdown, "Filters")
     UIDropDownMenu_SetWidth(filterDropdown, 120)
 
-    -- Right panel (packs) - adjusted to connect to settings panel
+    -- Right panel (packs) - adjusted to match mounts panel height
     local packPanel = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     packPanel:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -20, -35)
-    packPanel:SetPoint("BOTTOMRIGHT", settingsPanel, "TOPRIGHT", 0, -10) -- Connect to settings panel
-    packPanel:SetSize(350, 0) -- Height will be calculated from points
+    packPanel:SetSize(350, 420) -- Same height as mounts panel
     packPanel:SetBackdrop({
         bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",

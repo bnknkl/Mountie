@@ -2,7 +2,7 @@
 ## Title: Mountie
 ## Notes: Create and manage mount sets for different zones, expansions, and transmogs
 ## Author: YourName
-## Version: 1.0.0
+## Version: 0.5.5
 ## SavedVariables: MountieDB
 ## Bindings: Bindings.xml
 
