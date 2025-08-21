@@ -8,6 +8,121 @@ local function EnsureConditions(pack)
     pack.conditions = pack.conditions or {}
 end
 
+local function UpdateZoneDisplay(dlg)
+    if not dlg.zoneText then return end
+    
+    -- Try multiple methods to get the current zone
+    local currentMapID = C_Map.GetBestMapForUnit("player")
+    local zoneName = nil
+    
+    -- First try the standard API
+    if currentMapID then
+        local mapInfo = C_Map.GetMapInfo(currentMapID)
+        if mapInfo and mapInfo.name then
+            zoneName = mapInfo.name
+            Mountie.Debug("Zone detected via GetBestMapForUnit: " .. zoneName)
+        else
+            Mountie.Debug("Got map ID " .. currentMapID .. " but no map info available")
+        end
+    end
+    
+    -- Fallback methods for when the main API fails (common after UI reload)
+    if not zoneName then
+        -- Try GetRealZoneText
+        local realZone = GetRealZoneText()
+        if realZone and realZone ~= "" then
+            zoneName = realZone
+            Mountie.Debug("Zone detected via GetRealZoneText: " .. zoneName)
+        end
+    end
+    
+    if not zoneName then
+        -- Try GetZoneText as another fallback
+        local zoneText = GetZoneText()
+        if zoneText and zoneText ~= "" then
+            zoneName = zoneText
+            Mountie.Debug("Zone detected via GetZoneText: " .. zoneName)
+        end
+    end
+    
+    if not zoneName then
+        -- Try GetSubZoneText as a last resort
+        local subZone = GetSubZoneText()
+        if subZone and subZone ~= "" then
+            zoneName = subZone .. " (subzone)"
+            Mountie.Debug("Zone detected via GetSubZoneText: " .. zoneName)
+        end
+    end
+    
+    -- If we found a zone name, display it
+    if zoneName then
+        dlg.zoneText:SetText(zoneName)
+        return
+    end
+    
+    -- If no zone detected, show "Unknown" and start retry process
+    dlg.zoneText:SetText("Unknown")
+    Mountie.Debug("Zone display set to Unknown - no zone info available via any method")
+    
+    -- More aggressive retry strategy for cases where zone isn't immediately available (like after UI reload)
+    local retryAttempts = 0
+    local maxRetries = 10
+    local retryTimer
+    
+    local function RetryZoneDetection()
+        retryAttempts = retryAttempts + 1
+        if retryAttempts > maxRetries or not dlg:IsShown() then
+            if retryTimer then
+                retryTimer:Cancel()
+            end
+            Mountie.Debug("Zone detection gave up after " .. retryAttempts .. " attempts")
+            return
+        end
+        
+        -- Try all methods again
+        local foundZone = nil
+        
+        local retryMapID = C_Map.GetBestMapForUnit("player")
+        if retryMapID then
+            local retryMapInfo = C_Map.GetMapInfo(retryMapID)
+            if retryMapInfo and retryMapInfo.name then
+                foundZone = retryMapInfo.name
+                Mountie.Debug("Zone found on retry " .. retryAttempts .. " via GetBestMapForUnit: " .. foundZone)
+            end
+        end
+        
+        if not foundZone then
+            local realZone = GetRealZoneText()
+            if realZone and realZone ~= "" then
+                foundZone = realZone
+                Mountie.Debug("Zone found on retry " .. retryAttempts .. " via GetRealZoneText: " .. foundZone)
+            end
+        end
+        
+        if not foundZone then
+            local zoneText = GetZoneText()
+            if zoneText and zoneText ~= "" then
+                foundZone = zoneText
+                Mountie.Debug("Zone found on retry " .. retryAttempts .. " via GetZoneText: " .. foundZone)
+            end
+        end
+        
+        if foundZone then
+            dlg.zoneText:SetText(foundZone)
+            if retryTimer then
+                retryTimer:Cancel()
+            end
+            return
+        else
+            Mountie.Debug("Retry " .. retryAttempts .. ": Still no zone info available")
+        end
+    end
+    
+    -- Start with immediate retry, then every 1 second for up to 10 seconds
+    C_Timer.After(0.5, RetryZoneDetection)
+    retryTimer = C_Timer.NewTicker(1, RetryZoneDetection)
+end
+
 -- Build the visible list of rules inside the dialog
 local function RebuildRulesList(container, pack)
     Mountie.Debug("RebuildRulesList called for pack: " .. (pack.name or "unknown"))
@@ -27,7 +142,9 @@ local function RebuildRulesList(container, pack)
     local y = -10
     for i, rule in ipairs(pack.conditions) do
         local row = CreateFrame("Frame", nil, container)
-        row:SetSize(360, 22)
+        -- Increase height for custom transmog rules that have two lines of text
+        local rowHeight = (rule.type == "custom_transmog") and 35 or 22
+        row:SetSize(360, rowHeight)
         row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, y)
 
         local text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -41,13 +158,128 @@ local function RebuildRulesList(container, pack)
             local setInfo = Mountie.GetTransmogSetInfo(rule.setID)
             local setName = setInfo and setInfo.name or ("SetID " .. tostring(rule.setID))
             text:SetText("Transmog: " .. setName)
+        elseif rule.type == "custom_transmog" then
+            local transmogName = rule.transmogName or "Custom Transmog"
+            local strictness = rule.strictness or 6
+            local weaponsText = rule.includeWeapons and " +Weapons" or ""
+            text:SetText(string.format("Custom Transmog: %s\n(Strictness: %d%s)", transmogName, strictness, weaponsText))
         else
             text:SetText("Unknown rule type")
         end
 
+        -- Add strictness slider and weapon checkbox for custom transmog rules
+        local strictnessSlider, weaponCheckbox
+        if rule.type == "custom_transmog" then
+            -- Weapon inclusion checkbox
+            weaponCheckbox = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+            weaponCheckbox:SetSize(16, 16)
+            weaponCheckbox:SetPoint("RIGHT", row, "RIGHT", -130, 0)
+            weaponCheckbox:SetChecked(rule.includeWeapons or false)
+            
+            -- Weapon checkbox tooltip
+            weaponCheckbox:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Include Weapons", 1, 1, 1, 1, true)
+                GameTooltip:AddLine("Check to include weapon appearances in transmog matching.", 1, 1, 0.8, true)
+                GameTooltip:AddLine("Uncheck to match armor only (weapons ignored).", 1, 1, 0.8, true)
+                GameTooltip:Show()
+            end)
+            weaponCheckbox:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            
+            -- Update rule when checkbox changes
+            weaponCheckbox:SetScript("OnClick", function(self)
+                rule.includeWeapons = self:GetChecked()
+                
+                -- Adjust slider max value based on weapon inclusion
+                local newMax = rule.includeWeapons and 13 or 11
+                strictnessSlider:SetMinMaxValues(1, newMax)
+                
+                -- Adjust strictness if it's now too high
+                if rule.strictness > newMax then
+                    rule.strictness = newMax
+                    strictnessSlider:SetValue(newMax)
+                end
+                
+                -- Update display text
+                local transmogName = rule.transmogName or "Custom Transmog"
+                local strictness = rule.strictness or 6
+                local weaponsText = rule.includeWeapons and " +Weapons" or ""
+                text:SetText(string.format("Custom Transmog: %s\n(Strictness: %d%s)", transmogName, strictness, weaponsText))
+                -- Re-evaluate packs
+                C_Timer.After(0.1, Mountie.SelectActivePack)
+            end)
+            
+            strictnessSlider = CreateFrame("Slider", nil, row, "OptionsSliderTemplate")
+            strictnessSlider:SetSize(80, 20)
+            strictnessSlider:SetPoint("RIGHT", row, "RIGHT", -50, 0)
+            strictnessSlider:SetMinMaxValues(1, rule.includeWeapons and 13 or 11)
+            strictnessSlider:SetValue(rule.strictness or 6)
+            strictnessSlider:SetValueStep(1)
+            strictnessSlider:SetObeyStepOnDrag(true)
+            
+            -- Add tooltip explaining strictness
+            strictnessSlider:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Transmog Strictness", 1, 1, 1, 1, true)
+                local maxSlots = rule.includeWeapons and 13 or 11
+                local slotType = rule.includeWeapons and "armor + weapon pieces" or "armor pieces"
+                GameTooltip:AddLine("How many " .. slotType .. " must match for this rule to activate:", 1, 1, 0.8, true)
+                GameTooltip:AddLine(" ")
+                if rule.includeWeapons then
+                    GameTooltip:AddLine("1-4: Very loose (any few pieces)", 0.8, 1, 0.8)
+                    GameTooltip:AddLine("5-8: Moderate (most pieces)", 1, 1, 0.8)
+                    GameTooltip:AddLine("9-11: Strict (almost all pieces)", 1, 0.8, 0.8)
+                    GameTooltip:AddLine("12-13: Perfect (all/nearly all pieces)", 1, 0.6, 0.6)
+                else
+                    GameTooltip:AddLine("1-3: Very loose (any few pieces)", 0.8, 1, 0.8)
+                    GameTooltip:AddLine("4-6: Moderate (most pieces)", 1, 1, 0.8)
+                    GameTooltip:AddLine("7-9: Strict (almost all pieces)", 1, 0.8, 0.8)
+                    GameTooltip:AddLine("10-11: Perfect (all/nearly all pieces)", 1, 0.6, 0.6)
+                end
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine("Current: " .. math.floor(self:GetValue()) .. " pieces must match", 1, 1, 1)
+                GameTooltip:Show()
+            end)
+            strictnessSlider:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            
+            -- Update the rule when slider changes
+            strictnessSlider:SetScript("OnValueChanged", function(self, value)
+                local newStrictness = math.floor(value)
+                rule.strictness = newStrictness
+                -- Update the display text
+                local transmogName = rule.transmogName or "Custom Transmog"
+                local weaponsText = rule.includeWeapons and " +Weapons" or ""
+                text:SetText(string.format("Custom Transmog: %s\n(Strictness: %d%s)", transmogName, newStrictness, weaponsText))
+                -- Re-evaluate packs
+                C_Timer.After(0.1, Mountie.SelectActivePack)
+                
+                -- Update tooltip if it's showing
+                if GameTooltip:IsOwned(self) then
+                    GameTooltip:SetText("Transmog Strictness", 1, 1, 1, 1, true)
+                    local slotType = rule.includeWeapons and "armor + weapon pieces" or "armor pieces"
+                    GameTooltip:AddLine("How many " .. slotType .. " must match for this rule to activate:", 1, 1, 0.8, true)
+                    GameTooltip:AddLine(" ")
+                    if rule.includeWeapons then
+                        GameTooltip:AddLine("1-4: Very loose (any few pieces)", 0.8, 1, 0.8)
+                        GameTooltip:AddLine("5-8: Moderate (most pieces)", 1, 1, 0.8)
+                        GameTooltip:AddLine("9-11: Strict (almost all pieces)", 1, 0.8, 0.8)
+                        GameTooltip:AddLine("12-13: Perfect (all/nearly all pieces)", 1, 0.6, 0.6)
+                    else
+                        GameTooltip:AddLine("1-3: Very loose (any few pieces)", 0.8, 1, 0.8)
+                        GameTooltip:AddLine("4-6: Moderate (most pieces)", 1, 1, 0.8)
+                        GameTooltip:AddLine("7-9: Strict (almost all pieces)", 1, 0.8, 0.8)
+                        GameTooltip:AddLine("10-11: Perfect (all/nearly all pieces)", 1, 0.6, 0.6)
+                    end
+                    GameTooltip:AddLine(" ")
+                    GameTooltip:AddLine("Current: " .. newStrictness .. " pieces must match", 1, 1, 1)
+                    GameTooltip:Show()
+                end
+            end)
+        end
+
         local del = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
         del:SetSize(22, 18)
-        del:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        del:SetPoint("RIGHT", row, "RIGHT", (strictnessSlider and weaponCheckbox) and -155 or 0, 0)
         del:SetText("X")
         del:SetScript("OnClick", function()
             if Mountie.TableRemoveByIndex(pack.conditions, i) then
@@ -63,11 +295,17 @@ local function RebuildRulesList(container, pack)
         container.ruleRows[#container.ruleRows+1] = row
         row:Show() -- Explicitly show the row
         Mountie.Debug("Created rule row " .. i .. ": " .. text:GetText())
-        y = y - 24
+        -- Use different spacing based on row height
+        y = y - (rowHeight + 2)
     end
 
     -- Update content height and manage scrollbar visibility
-    local contentHeight = math.max(#pack.conditions * 24 + 20, 1) -- 24px per rule + padding
+    local totalHeight = 20 -- Base padding
+    for _, rule in ipairs(pack.conditions) do
+        local ruleHeight = (rule.type == "custom_transmog") and 37 or 26 -- Row height + spacing
+        totalHeight = totalHeight + ruleHeight
+    end
+    local contentHeight = math.max(totalHeight, 1)
     container:SetHeight(contentHeight)
     
     -- Get the scroll frame (container's parent)
@@ -137,6 +375,7 @@ function MountieUI.ShowRulesDialog(pack)
         local zoneText = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         zoneText:SetPoint("LEFT", zoneLabel, "RIGHT", 8, 0)
         zoneText:SetText("Unknown")
+        dlg.zoneText = zoneText -- Store reference for updates
 
         -- "Match parent zones" checkbox
         local parentCheck = CreateFrame("CheckButton", nil, dlg, "UICheckButtonTemplate")
@@ -200,45 +439,202 @@ function MountieUI.ShowRulesDialog(pack)
         addTransmogBtn:SetSize(130, 22)
         addTransmogBtn:SetPoint("TOPLEFT", transmogLabel, "BOTTOMLEFT", 0, -10)
         addTransmogBtn:SetText("Add Current Transmog")
-        addTransmogBtn:SetScript("OnClick", function()
+        
+        local addExistingBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
+        addExistingBtn:SetSize(130, 22)
+        addExistingBtn:SetPoint("LEFT", addTransmogBtn, "RIGHT", 10, 0)
+        addExistingBtn:SetText("Add Existing Transmog")
+        
+        addExistingBtn:SetScript("OnClick", function()
             if not dlg.targetPack then return end
-            local setID = Mountie.GetCurrentTransmogSetID()
-            if not setID then
-                Mountie.Print("No transmog set detected. Wear more pieces of a set.")
+            
+            -- Find all existing custom transmog rules across all packs
+            local existingTransmogs = {}
+            local allPacks = Mountie.GetCharacterPacks()
+            
+            for _, pack in ipairs(allPacks) do
+                if pack.conditions then
+                    for _, condition in ipairs(pack.conditions) do
+                        if condition.type == "custom_transmog" and condition.transmogName and condition.appearance then
+                            -- Avoid duplicates by checking if we already have this transmog name
+                            local found = false
+                            for _, existing in ipairs(existingTransmogs) do
+                                if existing.transmogName == condition.transmogName then
+                                    found = true
+                                    break
+                                end
+                            end
+                            if not found then
+                                table.insert(existingTransmogs, {
+                                    transmogName = condition.transmogName,
+                                    appearance = condition.appearance,
+                                    includeWeapons = condition.includeWeapons,
+                                    strictness = condition.strictness
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+            
+            if #existingTransmogs == 0 then
+                Mountie.Print("No existing custom transmog rules found. Create one first with 'Add Current Transmog'.")
                 return
             end
             
-            EnsureConditions(dlg.targetPack)
-            table.insert(dlg.targetPack.conditions, {
-                type = "transmog",
-                setID = setID,
-                priority = MountieDB.settings.rulePriorities.transmog or 100,
-            })
+            -- Create selection dialog
+            local selectDialog = CreateFrame("Frame", nil, dlg, "BasicFrameTemplateWithInset")
+            selectDialog:SetSize(350, 300)
+            selectDialog:SetPoint("CENTER", dlg, "CENTER", 0, 0)
+            selectDialog:SetFrameStrata("DIALOG")
+            selectDialog:SetFrameLevel(dlg:GetFrameLevel() + 10)
+            selectDialog.TitleText:SetText("Select Existing Transmog")
             
-            local setInfo = Mountie.GetTransmogSetInfo(setID)
-            local setName = setInfo and setInfo.name or ("Set " .. setID)
-            Mountie.VerbosePrint("Added transmog rule: " .. setName)
+            local selectLabel = selectDialog:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            selectLabel:SetPoint("TOPLEFT", selectDialog, "TOPLEFT", 15, -35)
+            selectLabel:SetText("Choose a transmog rule to copy:")
             
-            RebuildRulesList(dlg.rulesList, dlg.targetPack)
-            C_Timer.After(0.1, Mountie.SelectActivePack)
+            -- Create scroll frame for transmog list
+            local scrollFrame = CreateFrame("ScrollFrame", nil, selectDialog, "UIPanelScrollFrameTemplate")
+            scrollFrame:SetPoint("TOPLEFT", selectLabel, "BOTTOMLEFT", 0, -10)
+            scrollFrame:SetPoint("BOTTOMRIGHT", selectDialog, "BOTTOMRIGHT", -28, 50)
             
-            -- Refresh pack panel
-            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
-                _G.MountieMainFrame.packPanel.refreshPacks()
+            local scrollContent = CreateFrame("Frame", nil, scrollFrame)
+            scrollContent:SetSize(300, 1)
+            scrollFrame:SetScrollChild(scrollContent)
+            
+            -- Create transmog selection buttons
+            local yPos = -5
+            for i, transmog in ipairs(existingTransmogs) do
+                local btn = CreateFrame("Button", nil, scrollContent, "UIPanelButtonTemplate")
+                btn:SetSize(280, 22)
+                btn:SetPoint("TOPLEFT", scrollContent, "TOPLEFT", 0, yPos)
+                
+                local weaponText = transmog.includeWeapons and " +Weapons" or ""
+                btn:SetText(string.format("%s (Strictness: %d%s)", transmog.transmogName, transmog.strictness or 6, weaponText))
+                
+                btn:SetScript("OnClick", function()
+                    -- Add the selected transmog rule to current pack
+                    EnsureConditions(dlg.targetPack)
+                    table.insert(dlg.targetPack.conditions, {
+                        type = "custom_transmog",
+                        appearance = transmog.appearance,
+                        transmogName = transmog.transmogName,
+                        includeWeapons = transmog.includeWeapons,
+                        strictness = transmog.strictness,
+                        priority = MountieDB.settings.rulePriorities.transmog or 100,
+                    })
+                    
+                    Mountie.VerbosePrint("Added existing transmog rule: " .. transmog.transmogName)
+                    
+                    RebuildRulesList(dlg.rulesList, dlg.targetPack)
+                    C_Timer.After(0.1, Mountie.SelectActivePack)
+                    
+                    -- Refresh pack panel
+                    if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                        _G.MountieMainFrame.packPanel.refreshPacks()
+                    end
+                    
+                    selectDialog:Hide()
+                end)
+                
+                yPos = yPos - 25
             end
+            
+            -- Set scroll content height
+            scrollContent:SetHeight(math.max(#existingTransmogs * 25 + 10, 1))
+            
+            -- Close button
+            local closeBtn = CreateFrame("Button", nil, selectDialog, "UIPanelButtonTemplate")
+            closeBtn:SetSize(60, 22)
+            closeBtn:SetPoint("BOTTOM", selectDialog, "BOTTOM", 0, 15)
+            closeBtn:SetText("Cancel")
+            closeBtn:SetScript("OnClick", function() selectDialog:Hide() end)
+            
+            selectDialog:Show()
         end)
-
-        local browseTransmogBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
-        browseTransmogBtn:SetSize(130, 22)
-        browseTransmogBtn:SetPoint("LEFT", addTransmogBtn, "RIGHT", 10, 0)
-        browseTransmogBtn:SetText("Browse Transmog Sets")
-        browseTransmogBtn:SetScript("OnClick", function()
-            if dlg.transmogPicker then
-                dlg.transmogPicker:Show()
-            else
-                dlg.transmogPicker = MountieUI.CreateTransmogPicker(dlg)
-                dlg.transmogPicker:Show()
+        
+        addTransmogBtn:SetScript("OnClick", function()
+            if not dlg.targetPack then return end
+            
+            -- Create input dialog for transmog name
+            local inputDialog = CreateFrame("Frame", nil, dlg, "BasicFrameTemplateWithInset")
+            inputDialog:SetSize(300, 120)
+            inputDialog:SetPoint("CENTER", dlg, "CENTER", 0, 0)
+            inputDialog:SetFrameStrata("DIALOG")
+            inputDialog:SetFrameLevel(dlg:GetFrameLevel() + 10)
+            inputDialog.TitleText:SetText("Name Your Transmog")
+            
+            local inputLabel = inputDialog:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            inputLabel:SetPoint("TOPLEFT", inputDialog, "TOPLEFT", 15, -35)
+            inputLabel:SetText("Enter a name for this transmog:")
+            
+            local inputBox = CreateFrame("EditBox", nil, inputDialog, "InputBoxTemplate")
+            inputBox:SetSize(200, 20)
+            inputBox:SetPoint("TOPLEFT", inputLabel, "BOTTOMLEFT", 0, -10)
+            inputBox:SetText("My Transmog")
+            inputBox:SetAutoFocus(true)
+            inputBox:HighlightText()
+            
+            local okBtn = CreateFrame("Button", nil, inputDialog, "UIPanelButtonTemplate")
+            okBtn:SetSize(60, 22)
+            okBtn:SetPoint("BOTTOMLEFT", inputDialog, "BOTTOMLEFT", 15, 15)
+            okBtn:SetText("OK")
+            
+            local cancelBtn = CreateFrame("Button", nil, inputDialog, "UIPanelButtonTemplate")
+            cancelBtn:SetSize(60, 22)
+            cancelBtn:SetPoint("LEFT", okBtn, "RIGHT", 10, 0)
+            cancelBtn:SetText("Cancel")
+            
+            local function addTransmogRule()
+                local transmogName = inputBox:GetText()
+                if transmogName == "" then transmogName = "My Transmog" end
+                
+                -- Capture current appearance using our new system
+                local appearance = Mountie.CaptureCurrentAppearance(false)
+                if not appearance or not next(appearance) then
+                    Mountie.Print("Could not capture current transmog appearance.")
+                    Mountie.Print("Visit a Transmogrifier vendor and open the transmog UI once to initialize the system.")
+                    inputDialog:Hide()
+                    return
+                end
+                
+                -- Count filled slots for user feedback
+                local filledSlots = 0
+                for slot, appearanceID in pairs(appearance) do
+                    if appearanceID then filledSlots = filledSlots + 1 end
+                end
+                
+                -- Add custom transmog rule
+                EnsureConditions(dlg.targetPack)
+                table.insert(dlg.targetPack.conditions, {
+                    type = "custom_transmog",
+                    appearance = appearance,
+                    transmogName = transmogName,
+                    includeWeapons = false,
+                    strictness = 6, -- Default strictness
+                    priority = MountieDB.settings.rulePriorities.transmog or 100,
+                })
+                
+                Mountie.VerbosePrint("Added custom transmog rule '" .. transmogName .. "' (" .. filledSlots .. " slots captured)")
+                
+                RebuildRulesList(dlg.rulesList, dlg.targetPack)
+                C_Timer.After(0.1, Mountie.SelectActivePack)
+                
+                -- Refresh pack panel
+                if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                    _G.MountieMainFrame.packPanel.refreshPacks()
+                end
+                
+                inputDialog:Hide()
             end
+            
+            okBtn:SetScript("OnClick", addTransmogRule)
+            cancelBtn:SetScript("OnClick", function() inputDialog:Hide() end)
+            inputBox:SetScript("OnEnterPressed", addTransmogRule)
+            inputBox:SetScript("OnEscapePressed", function() inputDialog:Hide() end)
+            
+            inputDialog:Show()
         end)
 
         -- Rules list container (moved down with proper spacing)
@@ -266,13 +662,31 @@ function MountieUI.ShowRulesDialog(pack)
         dlg.transmogText = transmogText
         dlg.addTransmogBtn = addTransmogBtn
 
+        -- Zone change event handler for immediate updates
+        local function OnZoneChanged()
+            if dlg:IsShown() then
+                UpdateZoneDisplay(dlg)
+            end
+        end
+        
         -- OnShow: refresh current zone and transmog info and list
         dlg:SetScript("OnShow", function(self)
             Mountie.Debug("Rules dialog OnShow called")
             
-            local mapID = C_Map.GetBestMapForUnit("player")
-            local mi = mapID and C_Map.GetMapInfo(mapID) or nil
-            self.zoneText:SetText(mi and (mi.name .. " (ID " .. mapID .. ")") or "Unknown")
+            -- Update zone display using the robust zone detection
+            UpdateZoneDisplay(self)
+            
+            -- Additional zone update attempts for UI reload scenarios
+            C_Timer.After(1, function()
+                if self:IsShown() then
+                    UpdateZoneDisplay(self)
+                end
+            end)
+            C_Timer.After(3, function()
+                if self:IsShown() then
+                    UpdateZoneDisplay(self)
+                end
+            end)
             
             -- Update current transmog display
             local currentSetID = Mountie.GetCurrentTransmogSetID()
@@ -293,6 +707,45 @@ function MountieUI.ShowRulesDialog(pack)
             else
                 Mountie.Debug("No target pack found!")
             end
+            
+            -- Register for zone change events when dialog is shown
+            if not self.zoneEventFrame then
+                self.zoneEventFrame = CreateFrame("Frame")
+                self.zoneEventFrame:SetScript("OnEvent", function(frame, event, ...)
+                    OnZoneChanged()
+                end)
+            end
+            
+            -- Register zone change events
+            self.zoneEventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+            self.zoneEventFrame:RegisterEvent("ZONE_CHANGED")
+            self.zoneEventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+            self.zoneEventFrame:RegisterEvent("ZONE_CHANGED_INDOORS")
+            
+            -- Set up periodic zone updates while dialog is open (as fallback)
+            if not self.zoneUpdateTimer then
+                self.zoneUpdateTimer = C_Timer.NewTicker(5, function()
+                    if self:IsShown() then
+                        UpdateZoneDisplay(self)
+                    end
+                end)
+            end
+        end)
+        
+        -- OnHide: clean up the zone update timer and event handlers
+        dlg:SetScript("OnHide", function(self)
+            if self.zoneUpdateTimer then
+                self.zoneUpdateTimer:Cancel()
+                self.zoneUpdateTimer = nil
+            end
+            
+            -- Unregister zone change events when dialog is hidden
+            if self.zoneEventFrame then
+                self.zoneEventFrame:UnregisterEvent("PLAYER_ENTERING_WORLD")
+                self.zoneEventFrame:UnregisterEvent("ZONE_CHANGED")
+                self.zoneEventFrame:UnregisterEvent("ZONE_CHANGED_NEW_AREA")
+                self.zoneEventFrame:UnregisterEvent("ZONE_CHANGED_INDOORS")
+            end
         end)
 
         rulesDialog = dlg
@@ -302,13 +755,24 @@ function MountieUI.ShowRulesDialog(pack)
     rulesDialog.targetPack = pack
     rulesDialog:Show()
     
-    -- Force initial rules list update if this is the first time showing
-    -- (OnShow might not fire on initial creation)
+    -- Force initial zone detection and rules list update if this is the first time showing
+    -- (OnShow might not fire on initial creation, and we need zone detection before RebuildRulesList)
     if pack then
         C_Timer.After(0.01, function()
             if rulesDialog.targetPack and rulesDialog:IsShown() then
-                Mountie.Debug("Forcing initial RebuildRulesList")
+                Mountie.Debug("Forcing initial zone detection and RebuildRulesList")
+                -- Run zone detection first
+                UpdateZoneDisplay(rulesDialog)
+                -- Then rebuild the rules list
                 RebuildRulesList(rulesDialog.rulesList, rulesDialog.targetPack)
+            end
+        end)
+        
+        -- Additional update after a longer delay to handle cases where zone info takes time to become available
+        C_Timer.After(1, function()
+            if rulesDialog.targetPack and rulesDialog:IsShown() then
+                Mountie.Debug("Secondary zone detection update")
+                UpdateZoneDisplay(rulesDialog)
             end
         end)
     end

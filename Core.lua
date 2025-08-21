@@ -450,8 +450,32 @@ local function DoesRuleMatch(rule)
     
     if rule.type == "zone" then
         if not rule.mapID then return false, 0 end
+        
+        -- Try multiple methods to get current map ID
         local currentMapID = GetPlayerMapID()
-        if not currentMapID then return false, 0 end
+        
+        -- Fallback methods if GetPlayerMapID() fails
+        if not currentMapID then
+            -- Try getting from best map for unit
+            local mapID = C_Map.GetBestMapForUnit("player")
+            if mapID then
+                currentMapID = mapID
+            end
+        end
+        
+        if not currentMapID then
+            -- Last resort: try getting from current zone text
+            local zoneText = GetZoneText()
+            if zoneText and zoneText ~= "" then
+                -- Store unknown zones and retry later
+                Mountie.Debug("Zone detection failed after teleport, zone text: " .. zoneText)
+                C_Timer.After(2, function()
+                    Mountie.Debug("Retrying pack evaluation after zone detection delay")
+                    Mountie.SelectActivePack()
+                end)
+            end
+            return false, 0
+        end
 
         if currentMapID == rule.mapID then
             return true, priority + 50 -- Exact match bonus
@@ -476,6 +500,20 @@ local function DoesRuleMatch(rule)
             return true, priority
         end
         return false, 0
+        
+    elseif rule.type == "custom_transmog" then
+        if not rule.appearance or not rule.strictness then return false, 0 end
+        local matches, matchCount, totalSlots = Mountie.MatchTransmogAppearance(
+            rule.appearance,
+            rule.includeWeapons or false,
+            rule.strictness
+        )
+        if matches then
+            -- Higher match percentage gives better score
+            local matchScore = priority + (matchCount / totalSlots) * 25
+            return true, matchScore
+        end
+        return false, 0
     end
     
     return false, 0
@@ -489,6 +527,7 @@ local function ScorePackAgainstContext(pack)
     
     local totalScore = 0
     local matchedRules = {}
+    local totalRules = #pack.conditions
     
     for i, rule in ipairs(pack.conditions) do
         local matched, score = DoesRuleMatch(rule)
@@ -499,9 +538,13 @@ local function ScorePackAgainstContext(pack)
                 score = score,
                 index = i
             })
+        else
+            -- If ANY rule doesn't match, the pack doesn't qualify
+            return 0, {}
         end
     end
     
+    -- Only return a score if ALL rules matched
     return totalScore, matchedRules
 end
 
@@ -850,11 +893,58 @@ transmogEventFrame:SetScript("OnEvent", function(self, event, ...)
 end)
 
 -- Slash command handler
-local function SlashHandler(msg)
+-- Parse command line arguments, handling quoted strings
+local function ParseArgs(msg)
     local args = {}
-    for word in string.gmatch(msg or "", "%S+") do
-        table.insert(args, word)
+    local i = 1
+    local len = #msg
+    
+    while i <= len do
+        -- Skip whitespace
+        while i <= len and msg:sub(i, i):match("%s") do
+            i = i + 1
+        end
+        
+        if i > len then break end
+        
+        local startPos = i
+        local arg = ""
+        
+        if msg:sub(i, i) == '"' then
+            -- Quoted string
+            i = i + 1 -- Skip opening quote
+            while i <= len do
+                local char = msg:sub(i, i)
+                if char == '"' then
+                    i = i + 1 -- Skip closing quote
+                    break
+                elseif char == '\\' and i < len then
+                    -- Handle escaped characters
+                    i = i + 1
+                    arg = arg .. msg:sub(i, i)
+                else
+                    arg = arg .. char
+                end
+                i = i + 1
+            end
+        else
+            -- Unquoted string
+            while i <= len and not msg:sub(i, i):match("%s") do
+                arg = arg .. msg:sub(i, i)
+                i = i + 1
+            end
+        end
+        
+        if arg ~= "" then
+            table.insert(args, arg)
+        end
     end
+    
+    return args
+end
+
+local function SlashHandler(msg)
+    local args = ParseArgs(msg or "")
     local command = string.lower(args[1] or "")
 
     if command == "debug-on" then
@@ -1111,6 +1201,240 @@ local function SlashHandler(msg)
 
     elseif command == "debug-faction-mounts" then
         MountieUI.DebugFactionMounts()
+        
+    elseif command == "test-transmog" then
+        local packName = args[2]
+        local transmogName = args[3] or "Test Transmog"
+        local strictness = tonumber(args[4]) or 6
+        
+        if not packName then
+            Mountie.Print("Usage: /mountie test-transmog <pack_name> [transmog_name] [strictness]")
+            return
+        end
+        
+        -- Show what we're actually capturing
+        local appearance = Mountie.CaptureCurrentAppearance(false)
+        Mountie.Print("Capturing current appearance as '" .. transmogName .. "':")
+        local filledSlots = 0
+        for slot, appearanceID in pairs(appearance) do
+            if appearanceID then
+                filledSlots = filledSlots + 1
+                Mountie.Print("  " .. slot .. ": " .. appearanceID)
+            end
+        end
+        Mountie.Print("Total slots captured: " .. filledSlots)
+        
+        local success, message = Mountie.AddTransmogRule(packName, transmogName, false, strictness)
+        Mountie.Print(message)
+        
+        if success then
+            Mountie.Print("Testing transmog detection...")
+            local matchingPacks = Mountie.CheckTransmogRules()
+            if #matchingPacks > 0 then
+                Mountie.Print("Found " .. #matchingPacks .. " matching transmog rule(s)")
+                for _, match in ipairs(matchingPacks) do
+                    Mountie.Print("- " .. match.pack.name .. " (" .. match.rule.name .. "): " .. 
+                                match.matchCount .. "/" .. match.totalSlots .. " pieces")
+                end
+            else
+                Mountie.Print("No matching transmog rules")
+            end
+        end
+        
+    elseif command == "show-appearance" then
+        local appearance = Mountie.CaptureCurrentAppearance(true)
+        Mountie.Print("Current appearance:")
+        for slot, appearanceID in pairs(appearance) do
+            Mountie.Print("- " .. slot .. ": " .. (appearanceID or "empty"))
+        end
+        
+    elseif command == "debug-zone" then
+        Mountie.Print("Zone Detection Debug:")
+        
+        local mapID1 = GetPlayerMapID()
+        local mapID2 = C_Map.GetBestMapForUnit("player")
+        local zoneText = GetZoneText()
+        local subzoneText = GetSubZoneText()
+        local realZoneText = GetRealZoneText()
+        
+        Mountie.Print("GetPlayerMapID(): " .. (mapID1 or "nil"))
+        Mountie.Print("GetBestMapForUnit(): " .. (mapID2 or "nil"))
+        Mountie.Print("Zone Text: " .. (zoneText or "nil"))
+        Mountie.Print("Subzone Text: " .. (subzoneText or "nil"))
+        Mountie.Print("Real Zone Text: " .. (realZoneText or "nil"))
+        
+        local finalMapID = mapID1 or mapID2
+        if finalMapID then
+            local mapInfo = C_Map.GetMapInfo(finalMapID)
+            if mapInfo then
+                Mountie.Print("Map ID " .. finalMapID .. ": " .. (mapInfo.name or "Unknown"))
+                Mountie.Print("Map Type: " .. (mapInfo.mapType or "Unknown"))
+                
+                -- Show parent hierarchy
+                local parent = mapInfo
+                local level = 0
+                while parent and parent.parentMapID and parent.parentMapID > 0 and level < 5 do
+                    parent = C_Map.GetMapInfo(parent.parentMapID)
+                    if parent then
+                        level = level + 1
+                        Mountie.Print("Parent " .. level .. ": " .. parent.parentMapID .. " (" .. (parent.name or "Unknown") .. ")")
+                    end
+                end
+            else
+                Mountie.Print("Could not get map info for ID " .. finalMapID)
+            end
+        else
+            Mountie.Print("No valid map ID detected")
+        end
+        
+    elseif command == "update-transmog" then
+        Mountie.Print("Manually re-evaluating transmog rules...")
+        
+        -- Test if transmog system is working
+        local testAppearance = Mountie.CaptureCurrentAppearance(false)
+        if not testAppearance or not next(testAppearance) then
+            Mountie.Print("Transmog detection not working properly.")
+            Mountie.Print("Please visit a Transmogrifier vendor and open the transmog UI once to initialize the system.")
+            Mountie.Print("After that, transmog-based packs will work automatically when changing transmogs.")
+            return
+        end
+        
+        Mountie.SelectActivePack()
+        local selectedPacks = Mountie.runtime.selectedPacks or {}
+        if #selectedPacks == 0 then
+            Mountie.Print("No packs match current conditions")
+            Mountie.Print("If you just changed transmog, try visiting a Transmogrifier vendor to refresh the system.")
+        else
+            Mountie.Print("Active packs after update:")
+            for _, packData in ipairs(selectedPacks) do
+                Mountie.Print("- " .. packData.pack.name .. " (score: " .. packData.score .. ")")
+            end
+        end
+        
+    elseif command == "replace-transmog" then
+        local packName = args[2]
+        local transmogName = args[3] or "Updated Transmog"
+        local strictness = tonumber(args[4]) or 6
+        
+        if not packName then
+            Mountie.Print("Usage: /mountie replace-transmog <pack_name> [transmog_name] [strictness]")
+            return
+        end
+        
+        -- Auto-initialize transmog system if needed
+        if not C_AddOns.IsAddOnLoaded("Blizzard_Collections") then
+            C_AddOns.LoadAddOn("Blizzard_Collections")
+            Mountie.Print("Loading transmog system...")
+        end
+        
+        -- First remove existing transmog rules from the pack
+        local pack = Mountie.GetPack(packName)
+        if not pack then
+            Mountie.Print("Pack '" .. packName .. "' not found")
+            return
+        end
+        
+        -- Remove all custom_transmog rules
+        local removedCount = 0
+        for i = #pack.conditions, 1, -1 do
+            if pack.conditions[i].type == "custom_transmog" then
+                table.remove(pack.conditions, i)
+                removedCount = removedCount + 1
+            end
+        end
+        
+        if removedCount > 0 then
+            Mountie.Print("Removed " .. removedCount .. " existing transmog rule(s) from '" .. packName .. "'")
+        end
+        
+        -- Add the new rule
+        local appearance = Mountie.CaptureCurrentAppearance(false)
+        Mountie.Print("Replacing with current appearance as '" .. transmogName .. "':")
+        local filledSlots = 0
+        for slot, appearanceID in pairs(appearance) do
+            if appearanceID then
+                filledSlots = filledSlots + 1
+                Mountie.Print("  " .. slot .. ": " .. appearanceID)
+            end
+        end
+        Mountie.Print("Total slots captured: " .. filledSlots)
+        
+        local success, message = Mountie.AddTransmogRule(packName, transmogName, false, strictness)
+        Mountie.Print(message)
+        
+    elseif command == "init-transmog" then
+        Mountie.Print("Initializing transmog system...")
+        
+        -- Force load the Collections addon
+        if not C_AddOns.IsAddOnLoaded("Blizzard_Collections") then
+            C_AddOns.LoadAddOn("Blizzard_Collections")
+            Mountie.Print("Loaded Blizzard_Collections addon")
+        else
+            Mountie.Print("Blizzard_Collections addon already loaded")
+        end
+        
+        -- Force initialize transmog UI and data
+        Mountie.Print("Force-loading transmog UI...")
+        
+        -- Load the Collections UI
+        CollectionsJournal_LoadUI()
+        
+        -- Open to Appearances tab to initialize transmog data
+        local wasShown = CollectionsJournal and CollectionsJournal:IsShown()
+        
+        -- Open Collections journal if not already shown
+        if not wasShown then
+            ToggleCollectionsJournal()
+        end
+        
+        -- Navigate to Appearances tab
+        if CollectionsJournal and CollectionsJournalTab4 then
+            CollectionsJournalTab4:Click()
+        end
+        
+        -- Let the UI load and initialize
+        C_Timer.After(1, function()
+            -- Try to access wardrobe frame elements to trigger initialization
+            if WardrobeFrame then
+                -- Just accessing these elements should trigger initialization
+                local _ = WardrobeCollectionFrame and WardrobeCollectionFrame.SetsCollectionFrame
+            end
+            
+            -- Force a transmog data refresh
+            if C_TransmogSets then
+                C_TransmogSets.GetAllSets()
+            end
+            
+            -- Close if it wasn't originally shown
+            C_Timer.After(0.5, function()
+                if not wasShown and CollectionsJournal then
+                    CollectionsJournal:Hide()
+                end
+                
+                Mountie.Print("Transmog UI initialization complete")
+            end)
+        end)
+        
+        -- Test transmog detection
+        C_Timer.After(0.5, function()
+            local testLoc = TransmogUtil and TransmogUtil.GetTransmogLocation(1, Enum.TransmogType.Appearance, Enum.TransmogModification.Main)
+            if testLoc then
+                local success = pcall(C_Transmog.GetSlotVisualInfo, testLoc)
+                if success then
+                    Mountie.Print("Transmog system initialized successfully!")
+                else
+                    Mountie.Print("Transmog system still not fully ready. Try manually opening Collections > Appearances.")
+                end
+            else
+                Mountie.Print("TransmogUtil not available. Transmog detection may not work.")
+            end
+        end)
+        
+    elseif command == "test-parse" then
+        Mountie.Print("Parsed arguments:")
+        for i, arg in ipairs(args) do
+            Mountie.Print(i .. ": '" .. arg .. "'")
+        end
     
     elseif command == "verbose-on" then
         MountieDB.settings.verboseMode = true
@@ -1171,6 +1495,11 @@ local function SlashHandler(msg)
         Mountie.Print("/mountie status - Show addon status")
         Mountie.Print("/mountie transmog - Show current transmog set")
         Mountie.Print("/mountie packs-status - Show matching packs and scores")
+        Mountie.Print("/mountie test-transmog <pack> [name] [strictness] - Add transmog rule to pack")
+        Mountie.Print("/mountie replace-transmog <pack> [name] [strictness] - Replace pack's transmog rules")
+        Mountie.Print("/mountie update-transmog - Manually re-evaluate transmog rules")
+        Mountie.Print("/mountie init-transmog - Initialize transmog system (run if detection not working)")
+        Mountie.Print("/mountie debug-zone - Show detailed zone detection information")
         Mountie.Print("/mountie overlap-priority/intersection - Set overlap mode")
         Mountie.Print("/mountie flying-on/off - Toggle flying mount preference")
         Mountie.Print("/mountie verbose-on/off - Toggle verbose output")
@@ -1185,6 +1514,189 @@ local function SlashHandler(msg)
             Mountie.Print("/mountie rebuild-transmog - Rebuild transmog cache")
         end
     end
+end
+
+-- Transmog Detection System
+local function EnsureTransmogDataLoaded()
+    -- Try to force load transmog UI components if needed
+    if not C_AddOns.IsAddOnLoaded("Blizzard_Collections") then
+        Mountie.Debug("Loading Blizzard_Collections addon...")
+        C_AddOns.LoadAddOn("Blizzard_Collections")
+    end
+    
+    -- Check if TransmogUtil is available
+    if not _G.TransmogUtil then
+        Mountie.Debug("TransmogUtil not available - transmog detection may not work properly")
+        return false
+    end
+    
+    -- Test if we can create a transmog location
+    local success, testLoc = pcall(TransmogUtil.GetTransmogLocation, 1, Enum.TransmogType.Appearance, Enum.TransmogModification.Main)
+    if not success or not testLoc then
+        Mountie.Debug("TransmogLocation creation failed - transmog detection may not work properly")
+        return false
+    end
+    
+    return true
+end
+
+function Mountie.CaptureCurrentAppearance(includeWeapons)
+    includeWeapons = includeWeapons or false
+    
+    -- Ensure transmog data is available
+    if not EnsureTransmogDataLoaded() then
+        Mountie.Print("Warning: Transmog system not fully loaded.")
+        Mountie.Print("Visit a Transmogrifier vendor and open the transmog UI once, then try again.")
+        return {}
+    end
+    
+    local appearance = {}
+    
+    -- Define equipment slots to check
+    local armorSlots = {
+        head = INVSLOT_HEAD,
+        shoulder = INVSLOT_SHOULDER,
+        chest = INVSLOT_CHEST,
+        waist = INVSLOT_WAIST,
+        legs = INVSLOT_LEGS,
+        feet = INVSLOT_FEET,
+        wrist = INVSLOT_WRIST,
+        hands = INVSLOT_HAND,
+        back = INVSLOT_BACK,
+        shirt = INVSLOT_BODY,
+        tabard = INVSLOT_TABARD
+    }
+    
+    local weaponSlots = {
+        mainhand = INVSLOT_MAINHAND,
+        offhand = INVSLOT_OFFHAND
+    }
+    
+    -- Use the correct TransmogLocation approach to get actual transmog appearance IDs
+    for slotName, slotID in pairs(armorSlots) do
+        local transmogLocation = TransmogUtil.GetTransmogLocation(slotID, Enum.TransmogType.Appearance, Enum.TransmogModification.Main)
+        if transmogLocation then
+            local success, baseSourceID, baseVisualID, appliedSourceID, appliedVisualID = pcall(C_Transmog.GetSlotVisualInfo, transmogLocation)
+            if success then
+                -- Use appliedVisualID if available (transmog applied), otherwise baseVisualID (no transmog)
+                appearance[slotName] = appliedVisualID or baseVisualID
+            else
+                -- Fallback to item ID if transmog API fails
+                local itemID = GetInventoryItemID("player", slotID)
+                appearance[slotName] = itemID
+            end
+        else
+            appearance[slotName] = nil -- Empty slot
+        end
+    end
+    
+    -- Capture weapon appearance if requested  
+    if includeWeapons then
+        for slotName, slotID in pairs(weaponSlots) do
+            local transmogLocation = TransmogUtil.GetTransmogLocation(slotID, Enum.TransmogType.Appearance, Enum.TransmogModification.Main)
+            if transmogLocation then
+                local success, baseSourceID, baseVisualID, appliedSourceID, appliedVisualID = pcall(C_Transmog.GetSlotVisualInfo, transmogLocation)
+                if success then
+                    -- Use appliedVisualID if available (transmog applied), otherwise baseVisualID (no transmog)
+                    appearance[slotName] = appliedVisualID or baseVisualID
+                else
+                    -- Fallback to item ID if transmog API fails
+                    local itemID = GetInventoryItemID("player", slotID)
+                    appearance[slotName] = itemID
+                end
+            else
+                appearance[slotName] = nil -- Empty slot
+            end
+        end
+    end
+    
+    return appearance
+end
+
+function Mountie.MatchTransmogAppearance(savedAppearance, includeWeapons, strictness)
+    local currentAppearance = Mountie.CaptureCurrentAppearance(includeWeapons)
+    
+    local matches = 0
+    local totalSlots = 0
+    
+    -- Count matches for all saved slots
+    for slotName, savedID in pairs(savedAppearance) do
+        totalSlots = totalSlots + 1
+        local currentID = currentAppearance[slotName]
+        
+        -- Match if both are nil (empty) or both have same appearance ID
+        if (savedID == nil and currentID == nil) or (savedID == currentID) then
+            matches = matches + 1
+        end
+    end
+    
+    -- Return whether we meet the strictness requirement
+    return matches >= strictness, matches, totalSlots
+end
+
+function Mountie.AddTransmogRule(packName, transmogName, includeWeapons, strictness)
+    local packs = Mountie.GetCharacterPacks()
+    local pack = Mountie.GetPack(packName)
+    
+    if not pack then
+        return false, "Pack '" .. packName .. "' not found"
+    end
+    
+    -- Capture current appearance
+    local appearance = Mountie.CaptureCurrentAppearance(includeWeapons)
+    
+    -- Create transmog rule
+    local transmogRule = {
+        type = "custom_transmog",
+        name = transmogName,
+        strictness = strictness,
+        includeWeapons = includeWeapons,
+        appearance = appearance,
+        created = time()
+    }
+    
+    -- Add to pack conditions
+    pack.conditions = pack.conditions or {}
+    table.insert(pack.conditions, transmogRule)
+    
+    -- Save the updated packs
+    Mountie.SetCharacterPacks(packs)
+    
+    return true, "Transmog rule '" .. transmogName .. "' added to pack '" .. packName .. "'"
+end
+
+function Mountie.CheckTransmogRules()
+    local packs = Mountie.GetCharacterPacks()
+    local matchingPacks = {}
+    
+    for _, pack in ipairs(packs) do
+        if pack.conditions then
+            for _, condition in ipairs(pack.conditions) do
+                if condition.type == "custom_transmog" then
+                    local matches, matchCount, totalSlots = Mountie.MatchTransmogAppearance(
+                        condition.appearance, 
+                        condition.includeWeapons, 
+                        condition.strictness
+                    )
+                    
+                    if matches then
+                        table.insert(matchingPacks, {
+                            pack = pack,
+                            rule = condition,
+                            matchCount = matchCount,
+                            totalSlots = totalSlots,
+                            score = matchCount / totalSlots -- For priority calculation
+                        })
+                        
+                        Mountie.Debug("Transmog rule '" .. condition.name .. "' matched: " .. 
+                                    matchCount .. "/" .. totalSlots .. " pieces")
+                    end
+                end
+            end
+        end
+    end
+    
+    return matchingPacks
 end
 
 -- Initialize addon when loaded
@@ -1203,13 +1715,49 @@ local function OnEvent(self, event, ...)
         local addonName = ...
         if addonName == "Mountie" then
             Mountie.Debug("Mountie loaded successfully!")
-            Mountie.Print("v1.0.0 loaded. Type /mountie for commands.")
+            Mountie.Print("v0.5.1 loaded. Type /mountie for commands.")
+            
+            -- Auto-initialize transmog system after a brief delay
+            C_Timer.After(2, function()
+                if not C_AddOns.IsAddOnLoaded("Blizzard_Collections") then
+                    Mountie.Debug("Auto-loading Blizzard_Collections for transmog support...")
+                    C_AddOns.LoadAddOn("Blizzard_Collections")
+                end
+            end)
+            
+            -- Initialize pack evaluation with retries for zone detection
+            local function InitializePackEvaluation(attempt)
+                attempt = attempt or 1
+                C_Timer.After(1 + attempt, function()
+                    local mapID = GetPlayerMapID() or C_Map.GetBestMapForUnit("player")
+                    if mapID then
+                        Mountie.Debug("Zone detection initialized successfully on attempt " .. attempt)
+                        Mountie.SelectActivePack()
+                    elseif attempt < 5 then
+                        Mountie.Debug("Zone detection failed on attempt " .. attempt .. ", retrying...")
+                        InitializePackEvaluation(attempt + 1)
+                    else
+                        Mountie.Debug("Zone detection failed after 5 attempts, will retry on events")
+                    end
+                end)
+            end
+            
+            InitializePackEvaluation()
         end
     elseif event == "PLAYER_ENTERING_WORLD" or
            event == "ZONE_CHANGED" or
            event == "ZONE_CHANGED_NEW_AREA" then
         -- Evaluate active pack on relevant context changes
         C_Timer.After(0.2, Mountie.SelectActivePack)
+    elseif event == "ZONE_CHANGED_INDOORS" then
+        -- Handle indoor zone changes (like entering buildings/instances)
+        C_Timer.After(0.5, Mountie.SelectActivePack)
+    elseif event == "NEW_WMO_CHUNK" then
+        -- Handle entering new world model chunks (can indicate zone changes)
+        C_Timer.After(1, Mountie.SelectActivePack)
+    elseif event == "PLAYER_EQUIPMENT_CHANGED" then
+        -- Re-evaluate packs when equipment/transmog changes
+        C_Timer.After(0.5, Mountie.SelectActivePack)
     end
 end
 
@@ -1217,6 +1765,9 @@ eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("ZONE_CHANGED")
 eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+eventFrame:RegisterEvent("ZONE_CHANGED_INDOORS")
+eventFrame:RegisterEvent("NEW_WMO_CHUNK")
+eventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 eventFrame:SetScript("OnEvent", OnEvent)
 
 -- Register slash commands

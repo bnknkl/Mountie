@@ -644,8 +644,25 @@ function MountieUI.CreatePackMountFrame(packFrame, mountID, index)
         bg:SetColorTexture(0.05, 0.05, 0.15, 0.6)
         mountName:SetTextColor(0.9, 0.9, 0.9, 1)
         GameTooltip:Hide()
-        -- Hide mount model flyout
-        MountieUI.HideMountModelFlyout()
+        -- Delayed hide to allow movement to flyouts
+        C_Timer.After(0.5, function()
+            -- Double-check that mouse is actually away from the mount frame
+            if self:IsMouseOver() then
+                return -- Still over the mount frame, don't hide
+            end
+            
+            -- Check if mouse is over any flyout before hiding
+            local shouldHide = true
+            if _G.MountieMountModelFlyout and _G.MountieMountModelFlyout.isMouseOver then
+                shouldHide = false
+            end
+            if _G.MountieMountDebugFlyout and _G.MountieMountDebugFlyout.isMouseOver then
+                shouldHide = false
+            end
+            if shouldHide then
+                MountieUI.HideMountModelFlyout()
+            end
+        end)
     end)
     
     return mountFrame
