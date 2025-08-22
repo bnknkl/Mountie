@@ -1,22 +1,16 @@
--- Mountie: Pack Panel UI
 Mountie.Debug("UI/PackPanel.lua loading...")
 
 function MountieUI.SetupPackPanel(packPanel)
-    -- Pack panel title
     local packTitle = packPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     packTitle:SetPoint("TOP", packPanel, "TOP", 0, -15)
     packTitle:SetText("Mount Packs")
     
-    -- Create New Pack button
     local createPackButton = CreateFrame("Button", nil, packPanel, "UIPanelButtonTemplate")
     createPackButton:SetSize(120, 25)
     createPackButton:SetPoint("TOP", packTitle, "BOTTOM", 0, -15)
     createPackButton:SetText("Create New Pack")
     
-    -- Create pack list
     local packList = MountieUI.CreatePackList(packPanel)
-    
-    -- Store reference to dialog
     local packDialog = nil
     
     createPackButton:SetScript("OnClick", function()
@@ -26,10 +20,8 @@ function MountieUI.SetupPackPanel(packPanel)
         packDialog:Show()
     end)
     
-    -- Refresh function for pack list with escape handling
     local function refreshPacks()
         if packList then
-            -- Clean up any temporary expanded frame
             local content = packList.content
             if content.tempExpandedFrame then
                 content.tempExpandedFrame:Hide()
@@ -37,10 +29,7 @@ function MountieUI.SetupPackPanel(packPanel)
                 content.tempExpandedFrame = nil
             end
             
-            -- Get current packs
             local packs = Mountie.ListPacks()
-            
-            -- Clear existing frames
             local packFrames = packList.packFrames
             for i, frame in ipairs(packFrames) do
                 if frame then
@@ -52,15 +41,19 @@ function MountieUI.SetupPackPanel(packPanel)
             packList.packFrames = packFrames
             
             -- Create new frames
+            local yOffset = 0
             for i, pack in ipairs(packs) do
                 local frame = MountieUI.CreatePackFrame(content, pack)
-                frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -(i-1) * 70)
+                frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -yOffset)
                 packFrames[i] = frame
                 frame:Show()
+                
+                -- Add this frame's height plus a small gap for the next frame
+                yOffset = yOffset + frame:GetHeight() + 5
             end
             
             -- Update content height
-            local contentHeight = math.max(#packs * 70, 1)
+            local contentHeight = math.max(yOffset, 1)
             content:SetHeight(contentHeight)
             
             -- Reset scroll position
@@ -103,46 +96,157 @@ end
 
 function MountieUI.CreatePackFrame(parent, pack)
     local frame = CreateFrame("Frame", nil, parent)
-    frame:SetSize(300, 60)
+    local baseHeight = 70
+    local descriptionHeight = (pack.description and pack.description ~= "") and 14 or 0
+    frame:SetSize(300, baseHeight + descriptionHeight)
     
-    -- Expansion state
     frame.isExpanded = false
     frame.mountFrames = {}
     
-    -- Expand/collapse icon
     local expandIcon = frame:CreateTexture(nil, "OVERLAY")
     expandIcon:SetSize(12, 12)
     expandIcon:SetPoint("LEFT", frame, "LEFT", 8, 8)
     expandIcon:SetTexture("Interface\\Buttons\\UI-PlusButton-Up")
     frame.expandIcon = expandIcon
     
-    -- Pack name
     local name = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     name:SetPoint("TOPLEFT", expandIcon, "TOPRIGHT", 5, 0)
     name:SetText(pack.name)
-    name:SetTextColor(1, 1, 0.8, 1) -- Slightly yellow
+    name:SetTextColor(1, 1, 0.8, 1)
     frame.nameText = name
     
-    -- Pack info (mount count, description, and rule count)
-    local info = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    info:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -2)
-    info:SetPoint("RIGHT", frame, "RIGHT", -70, 0) -- Leave space for rules and delete buttons
-    info:SetJustifyH("LEFT")
+    local description = nil
+    local currentYOffset = -2
+    if pack.description and pack.description ~= "" then
+        description = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        description:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, currentYOffset)
+        description:SetPoint("RIGHT", frame, "RIGHT", -95, 0)
+        description:SetJustifyH("LEFT")
+        description:SetText(pack.description)
+        description:SetTextColor(0.9, 0.9, 0.7, 1)
+        frame.descriptionText = description
+        currentYOffset = currentYOffset - 14
+    end
+    
+    local zoneRuleCount = 0
+    local transmogRuleCount = 0
+    local customTransmogRuleCount = 0
+    
+    if pack.conditions then
+        for _, rule in ipairs(pack.conditions) do
+            if rule.type == "zone" then
+                zoneRuleCount = zoneRuleCount + 1
+            elseif rule.type == "transmog" then
+                transmogRuleCount = transmogRuleCount + 1
+            elseif rule.type == "custom_transmog" then
+                customTransmogRuleCount = customTransmogRuleCount + 1
+            end
+        end
+    end
+    
+    local zoneRules = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local lastElement = description or name
+    zoneRules:SetPoint("TOPLEFT", lastElement, description and "BOTTOMLEFT" or "BOTTOMLEFT", 0, currentYOffset)
+    zoneRules:SetPoint("RIGHT", frame, "RIGHT", -95, 0)
+    zoneRules:SetJustifyH("LEFT")
+    zoneRules:SetText("Zone Rules: " .. zoneRuleCount)
+    zoneRules:SetTextColor(0.5, 0.8, 1, 1)
+    frame.zoneRulesText = zoneRules
+    currentYOffset = currentYOffset - 12
+    
+    local totalTransmogRules = transmogRuleCount + customTransmogRuleCount
+    local transmogRules = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    transmogRules:SetPoint("TOPLEFT", zoneRules, "BOTTOMLEFT", 0, -2)
+    transmogRules:SetPoint("RIGHT", frame, "RIGHT", -95, 0)
+    transmogRules:SetJustifyH("LEFT")
+    transmogRules:SetText("Transmog Rules: " .. totalTransmogRules)
+    transmogRules:SetTextColor(1, 0.4, 1, 1)
+    frame.transmogRulesText = transmogRules
     
     local mountCount = #pack.mounts
-    local infoText = mountCount .. " mount" .. (mountCount == 1 and "" or "s")
-    if pack.description and pack.description ~= "" then
-        infoText = infoText .. " - " .. pack.description
-    end
+    local mountInfo = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    mountInfo:SetPoint("TOPLEFT", transmogRules, "BOTTOMLEFT", 0, -2)
+    mountInfo:SetPoint("RIGHT", frame, "RIGHT", -95, 0)
+    mountInfo:SetJustifyH("LEFT")
+    mountInfo:SetText(mountCount .. " mount" .. (mountCount == 1 and "" or "s"))
+    mountInfo:SetTextColor(0.7, 0.7, 0.7, 1)
+    frame.mountInfoText = mountInfo
     
-    -- Add rule count indicator with color
-    if pack.conditions and #pack.conditions > 0 then
-        infoText = infoText .. " |cff88ff88| " .. #pack.conditions .. " rule" .. (#pack.conditions == 1 and "" or "s") .. "|r"
-    end
+    local shareButton = CreateFrame("Button", nil, frame)
+    shareButton:SetSize(20, 20)
+    shareButton:SetPoint("RIGHT", frame, "RIGHT", -58, 0)
     
-    info:SetText(infoText)
-    info:SetTextColor(0.8, 0.8, 0.8, 1)
-    frame.infoText = info
+    local function updateShareIcon()
+        if pack.isShared then
+            shareButton:SetNormalTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
+            shareButton:SetHighlightTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
+            shareButton:SetPushedTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
+            
+            if not shareButton.extraIcon1 then
+                shareButton.extraIcon1 = shareButton:CreateTexture(nil, "OVERLAY")
+                shareButton.extraIcon1:SetSize(16, 16)
+                shareButton.extraIcon1:SetPoint("RIGHT", shareButton, "LEFT", 2, 0)
+                shareButton.extraIcon1:SetTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
+                shareButton.extraIcon1:SetAlpha(0.8)
+            end
+            
+            if not shareButton.extraIcon2 then
+                shareButton.extraIcon2 = shareButton:CreateTexture(nil, "OVERLAY")
+                shareButton.extraIcon2:SetSize(14, 14)
+                shareButton.extraIcon2:SetPoint("RIGHT", shareButton.extraIcon1, "LEFT", 2, 0)
+                shareButton.extraIcon2:SetTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
+                shareButton.extraIcon2:SetAlpha(0.6)
+            end
+            
+            shareButton.extraIcon1:Show()
+            shareButton.extraIcon2:Show()
+        else
+            shareButton:SetNormalTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
+            shareButton:SetHighlightTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
+            shareButton:SetPushedTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
+            
+            if shareButton.extraIcon1 then
+                shareButton.extraIcon1:Hide()
+            end
+            if shareButton.extraIcon2 then
+                shareButton.extraIcon2:Hide()
+            end
+        end
+    end
+    updateShareIcon()
+    
+    shareButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        if pack.isShared then
+            GameTooltip:SetText("Account-Wide Pack", 1, 1, 1)
+            GameTooltip:AddLine("This pack is shared across all characters", 0.5, 1, 0.5)
+            GameTooltip:AddLine("Click to make character-specific", 1, 0.8, 0.8)
+        else
+            GameTooltip:SetText("Character-Specific Pack", 1, 1, 1)
+            GameTooltip:AddLine("This pack is only available on this character", 1, 1, 0.5)
+            GameTooltip:AddLine("Click to share account-wide", 1, 0.8, 0.8)
+        end
+        GameTooltip:Show()
+    end)
+
+    shareButton:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
+
+    shareButton:SetScript("OnClick", function(self)
+        local success, message = Mountie.TogglePackShared(pack.name)
+        if success then
+            Mountie.Print(message)
+            -- Update the icon
+            updateShareIcon()
+            -- Refresh the pack list to reflect changes
+            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+                _G.MountieMainFrame.packPanel.refreshPacks()
+            end
+        else
+            Mountie.Print("Error: " .. message)
+        end
+    end)
     
     -- Rules button (gear/settings icon)
     local rulesButton = CreateFrame("Button", nil, frame)
@@ -233,12 +337,12 @@ function MountieUI.UpdatePackList(scrollFrame)
     -- Get all packs
     local packs = Mountie.ListPacks()
     
-    -- Create or update pack frames
+    -- Create or update pack frames with dynamic positioning
+    local yOffset = 0
     for i, pack in ipairs(packs) do
         local frame = packFrames[i]
         if not frame then
             frame = MountieUI.CreatePackFrame(content, pack)
-            frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -(i-1) * 70)
             packFrames[i] = frame
         else
             -- Update existing frame
@@ -247,7 +351,11 @@ function MountieUI.UpdatePackList(scrollFrame)
             -- This is a simplified update - in a more complex system we'd update the text elements
         end
         
+        frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -yOffset)
         frame:Show()
+        
+        -- Add this frame's height plus a small gap for the next frame
+        yOffset = yOffset + frame:GetHeight() + 5
     end
     
     -- Hide unused frames
@@ -256,7 +364,7 @@ function MountieUI.UpdatePackList(scrollFrame)
     end
     
     -- Update content height for scrolling
-    local contentHeight = math.max(#packs * 70, 1)
+    local contentHeight = math.max(yOffset, 1)
     content:SetHeight(contentHeight)
 end
 

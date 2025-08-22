@@ -436,12 +436,12 @@ function MountieUI.ShowRulesDialog(pack)
 
         -- Transmog buttons row (properly spaced below transmog label)
         local addTransmogBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
-        addTransmogBtn:SetSize(130, 22)
+        addTransmogBtn:SetSize(150, 22)
         addTransmogBtn:SetPoint("TOPLEFT", transmogLabel, "BOTTOMLEFT", 0, -10)
         addTransmogBtn:SetText("Add Current Transmog")
         
         local addExistingBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
-        addExistingBtn:SetSize(130, 22)
+        addExistingBtn:SetSize(150, 22)
         addExistingBtn:SetPoint("LEFT", addTransmogBtn, "RIGHT", 10, 0)
         addExistingBtn:SetText("Add Existing Transmog")
         

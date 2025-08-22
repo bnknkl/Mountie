@@ -1,19 +1,14 @@
--- Mountie: Core Pack and Mount Management
 Mountie.Debug("Core.lua loading...")
 
--- Runtime state for active-pack selection
 Mountie.runtime = Mountie.runtime or {
     activePackName = nil,
     selectedPacks = {},
     cachedTransmogSetID = nil,
 }
 
--- Cache for transmog set data
 local transmogSetCache = {}
 local lastTransmogCheck = 0
-local TRANSMOG_CHECK_INTERVAL = 2 -- Check every 2 seconds
-
--- Pack Management Functions
+local TRANSMOG_CHECK_INTERVAL = 2
 function Mountie.CreatePack(name, description)
     if not name or name == "" then
         return false, "Pack name cannot be empty"
@@ -21,12 +16,10 @@ function Mountie.CreatePack(name, description)
 
     Mountie.Debug("CreatePack called with name: " .. name)
 
-    -- Check if pack already exists for this character
-    local packs = Mountie.GetCharacterPacks()
-    for _, pack in ipairs(packs) do
-        if pack.name == name then
-            return false, "Pack '" .. name .. "' already exists"
-        end
+    local existingPack = Mountie.GetPackByName(name)
+    if existingPack then
+        local location = existingPack.isShared and "shared" or "character-specific"
+        return false, "Pack '" .. name .. "' already exists (" .. location .. ")"
     end
 
     local newPack = {
@@ -35,8 +28,10 @@ function Mountie.CreatePack(name, description)
         mounts = {},
         conditions = {},
         created = time(),
+        isShared = false,
     }
 
+    local packs = Mountie.GetCharacterPacks()
     table.insert(packs, newPack)
     Mountie.SetCharacterPacks(packs)
     Mountie.VerbosePrint("Pack added. Total packs: " .. #packs)
@@ -44,30 +39,35 @@ function Mountie.CreatePack(name, description)
 end
 
 function Mountie.DeletePack(name)
-    local packs = Mountie.GetCharacterPacks()
-    for i, pack in ipairs(packs) do
+    local charPacks = Mountie.GetCharacterPacks()
+    for i, pack in ipairs(charPacks) do
         if pack.name == name then
-            table.remove(packs, i)
-            Mountie.SetCharacterPacks(packs)
-            Mountie.Debug("Deleted pack: " .. name)
+            table.remove(charPacks, i)
+            Mountie.SetCharacterPacks(charPacks)
+            Mountie.Debug("Deleted character-specific pack: " .. name)
             return true, "Pack '" .. name .. "' deleted"
         end
     end
+    
+    if MountieDB.sharedPacks then
+        for i, pack in ipairs(MountieDB.sharedPacks) do
+            if pack.name == name then
+                table.remove(MountieDB.sharedPacks, i)
+                Mountie.Debug("Deleted shared pack: " .. name)
+                return true, "Shared pack '" .. name .. "' deleted"
+            end
+        end
+    end
+    
     return false, "Pack '" .. name .. "' not found"
 end
 
 function Mountie.GetPack(name)
-    local packs = Mountie.GetCharacterPacks()
-    for _, pack in ipairs(packs) do
-        if pack.name == name then
-            return pack
-        end
-    end
-    return nil
+    return Mountie.GetPackByName(name)
 end
 
 function Mountie.ListPacks()
-    return Mountie.GetCharacterPacks()
+    return Mountie.GetAllAvailablePacks()
 end
 
 -- Mount Management Functions
@@ -527,24 +527,81 @@ local function ScorePackAgainstContext(pack)
     
     local totalScore = 0
     local matchedRules = {}
-    local totalRules = #pack.conditions
+    
+    -- Group rules by type for proper logic handling
+    local zoneRules = {}
+    local transmogRules = {}
+    local customTransmogRules = {}
     
     for i, rule in ipairs(pack.conditions) do
-        local matched, score = DoesRuleMatch(rule)
-        if matched then
-            totalScore = totalScore + score
-            table.insert(matchedRules, {
-                type = rule.type,
-                score = score,
-                index = i
-            })
-        else
-            -- If ANY rule doesn't match, the pack doesn't qualify
+        if rule.type == "zone" then
+            table.insert(zoneRules, {rule = rule, index = i})
+        elseif rule.type == "transmog" then
+            table.insert(transmogRules, {rule = rule, index = i})
+        elseif rule.type == "custom_transmog" then
+            table.insert(customTransmogRules, {rule = rule, index = i})
+        end
+    end
+    
+    -- Zone rules: OR logic (any zone match qualifies)
+    local zoneMatched = false
+    if #zoneRules > 0 then
+        for _, ruleData in ipairs(zoneRules) do
+            local matched, score = DoesRuleMatch(ruleData.rule)
+            if matched then
+                zoneMatched = true
+                totalScore = totalScore + score
+                table.insert(matchedRules, {
+                    type = ruleData.rule.type,
+                    score = score,
+                    index = ruleData.index
+                })
+                -- Continue checking other zones for potential higher scores
+            end
+        end
+        
+        -- If we have zone rules but none matched, pack doesn't qualify
+        if not zoneMatched then
             return 0, {}
         end
     end
     
-    -- Only return a score if ALL rules matched
+    -- Transmog rules: AND logic (all must match)
+    if #transmogRules > 0 then
+        for _, ruleData in ipairs(transmogRules) do
+            local matched, score = DoesRuleMatch(ruleData.rule)
+            if matched then
+                totalScore = totalScore + score
+                table.insert(matchedRules, {
+                    type = ruleData.rule.type,
+                    score = score,
+                    index = ruleData.index
+                })
+            else
+                -- If any transmog rule doesn't match, pack doesn't qualify
+                return 0, {}
+            end
+        end
+    end
+    
+    -- Custom transmog rules: AND logic (all must match)
+    if #customTransmogRules > 0 then
+        for _, ruleData in ipairs(customTransmogRules) do
+            local matched, score = DoesRuleMatch(ruleData.rule)
+            if matched then
+                totalScore = totalScore + score
+                table.insert(matchedRules, {
+                    type = ruleData.rule.type,
+                    score = score,
+                    index = ruleData.index
+                })
+            else
+                -- If any custom transmog rule doesn't match, pack doesn't qualify
+                return 0, {}
+            end
+        end
+    end
+    
     return totalScore, matchedRules
 end
 
@@ -1036,11 +1093,15 @@ local function SlashHandler(msg)
 
     elseif command == "status" then
         EnsureFlyingPreferenceSetting()
-        local packs = Mountie.GetCharacterPacks()
+        local charPacks = Mountie.GetCharacterPacks()
+        local sharedPacks = MountieDB.sharedPacks or {}
+        local allPacks = Mountie.GetAllAvailablePacks()
         local charKey = UnitName("player") .. "-" .. GetRealmName()
         Mountie.Print("Status:")
         Mountie.Print("- Character: " .. charKey)
-        Mountie.Print("- Total packs: " .. #packs)
+        Mountie.Print("- Character-specific packs: " .. #charPacks)
+        Mountie.Print("- Account-wide packs: " .. #sharedPacks)
+        Mountie.Print("- Total available packs: " .. #allPacks)
         Mountie.Print("- Verbose mode: " .. (MountieDB.settings.verboseMode and "ON" or "OFF"))
         Mountie.Print("- Debug mode: " .. (MountieDB.settings.debugMode and "ON" or "OFF"))
         Mountie.Print("- Flying preference: " .. (MountieDB.settings.preferFlyingMounts and "ON" or "OFF"))
@@ -1078,14 +1139,15 @@ local function SlashHandler(msg)
         Mountie.Print(message)
 
     elseif command == "list" then
-        local packs = Mountie.GetCharacterPacks()
-        if #packs == 0 then
+        local allPacks = Mountie.GetAllAvailablePacks()
+        if #allPacks == 0 then
             Mountie.Print("No packs created yet. Use /mountie create <n> to make one!")
         else
             Mountie.Print("Your mount packs:")
-            for _, pack in ipairs(packs) do
+            for _, pack in ipairs(allPacks) do
                 local mountCount = #pack.mounts
-                Mountie.Print("- " .. pack.name .. " (" .. mountCount .. " mounts)")
+                local shareStatus = pack.isShared and " |cff88ff88[Account-Wide]|r" or " |cffffff88[Character]|r"
+                Mountie.Print("- " .. pack.name .. " (" .. mountCount .. " mounts)" .. shareStatus)
                 if pack.description ~= "" then
                     Mountie.Print("  " .. pack.description)
                 end
@@ -1436,6 +1498,28 @@ local function SlashHandler(msg)
             Mountie.Print(i .. ": '" .. arg .. "'")
         end
     
+    elseif command == "share" then
+        if not args[2] then
+            Mountie.Print("Usage: /mountie share <pack_name>")
+            return
+        end
+        local success, message = Mountie.TogglePackShared(args[2])
+        Mountie.Print(message)
+    
+    elseif command == "debug-db" then
+        Mountie.Print("Database Debug Info:")
+        Mountie.Print("MountieDB type: " .. type(MountieDB))
+        if MountieDB then
+            Mountie.Print("MountieDB.sharedPacks type: " .. type(MountieDB.sharedPacks))
+            if MountieDB.sharedPacks then
+                Mountie.Print("Shared packs count: " .. #MountieDB.sharedPacks)
+            else
+                Mountie.Print("MountieDB.sharedPacks is nil!")
+            end
+        else
+            Mountie.Print("MountieDB is nil!")
+        end
+    
     elseif command == "verbose-on" then
         MountieDB.settings.verboseMode = true
         Mountie.Print("Verbose mode: ON")
@@ -1485,6 +1569,7 @@ local function SlashHandler(msg)
         Mountie.Print("/mountie (or /mountie ui) - Open main window")
         Mountie.Print("/mountie create <n> [description] - Create a new pack")
         Mountie.Print("/mountie delete <n> - Delete a pack")
+        Mountie.Print("/mountie share <n> - Toggle pack between character-specific and account-wide")
         Mountie.Print("/mountie list - Show all packs for this character")
         Mountie.Print("/mountie characters - Show pack count across all characters")
         Mountie.Print("/mountie show <n> - Show mounts in a pack")
