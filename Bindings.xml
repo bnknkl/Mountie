@@ -1,5 +1,0 @@
-<Bindings>
-    <Binding name="MOUNTIE_SUMMON" category="BINDING_HEADER_MOUNTIE" runOnUp="false">
-        Mountie_MountKeybind()
-    </Binding>
-</Bindings>

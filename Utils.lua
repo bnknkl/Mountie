@@ -1,9 +1,5 @@
 -- Mountie: Utility Functions
 
--- Keybinding labels
-BINDING_HEADER_MOUNTIE = "Mountie"
-BINDING_NAME_MOUNTIE_SUMMON = "Summon from active pack"
-
 -- Initialize global addon namespaces early
 Mountie   = Mountie   or {}
 MountieUI = MountieUI or {}
