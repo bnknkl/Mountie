@@ -189,6 +189,59 @@ function MountieUI.CreatePackFrame(parent, pack)
     updateStatusDisplay()
     frame.updateStatusDisplay = updateStatusDisplay
     
+    -- Add transmog apply button if pack has transmog rules
+    local hasTransmogRule = false
+    local transmogSetID = nil
+    if pack.conditions then
+        for _, rule in ipairs(pack.conditions) do
+            if rule.type == "transmog" then
+                hasTransmogRule = true
+                transmogSetID = rule.setID
+                break
+            end
+        end
+    end
+    
+    if hasTransmogRule and transmogSetID then
+        local applyTransmogBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        applyTransmogBtn:SetSize(65, 16)
+        applyTransmogBtn:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -5, -5)
+        applyTransmogBtn:SetText("Apply Set")
+        
+        -- Tooltip for transmog apply button
+        applyTransmogBtn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Apply Transmog Set", 1, 1, 1, 1, true)
+            if C_Transmog.IsAtTransmogNPC() then
+                GameTooltip:AddLine("Apply this pack's transmog set.", 1, 1, 0.8, true)
+                local setInfo = Mountie.GetTransmogSetInfo(transmogSetID)
+                if setInfo then
+                    GameTooltip:AddLine("Set: " .. setInfo.name, 0.8, 0.8, 1, true)
+                end
+            else
+                GameTooltip:AddLine("Must be at a transmog vendor.", 1, 0.5, 0.5, true)
+            end
+            GameTooltip:Show()
+        end)
+        applyTransmogBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        
+        -- Enable/disable based on vendor status
+        applyTransmogBtn:SetEnabled(C_Transmog.IsAtTransmogNPC())
+        
+        -- Click handler for transmog apply
+        applyTransmogBtn:SetScript("OnClick", function()
+            if not C_Transmog.IsAtTransmogNPC() then
+                Mountie.Print("Must be at a transmog vendor to apply sets")
+                return
+            end
+            
+            local success, message = Mountie.ApplyTransmogSet(transmogSetID)
+            Mountie.Print(message)
+        end)
+        
+        frame.applyTransmogBtn = applyTransmogBtn
+    end
+    
     -- Hover effects for the main frame (simple color change for text)
     frame:EnableMouse(true)
     frame:SetScript("OnEnter", function(self)

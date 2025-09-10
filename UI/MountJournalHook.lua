@@ -19,17 +19,7 @@ end
 local function GetPacksForDropdown(mountID)
     local packs = {}
     
-    local charPacks = Mountie.GetCharacterPacks()
-    for _, pack in ipairs(charPacks) do
-        local mountInPack = IsMountInPack(mountID, pack.name)  -- slightly different variable name
-        table.insert(packs, {
-            name = pack.name,
-            isShared = false,
-            text = pack.name .. " (Character)",
-            isInPack = mountInPack
-        })
-    end
-    
+    -- Show shared packs first
     if MountieDB.sharedPacks then
         for _, pack in ipairs(MountieDB.sharedPacks) do
             local isInPack = IsMountInPack(mountID, pack.name)
@@ -40,6 +30,18 @@ local function GetPacksForDropdown(mountID)
                 isInPack = isInPack
             })
         end
+    end
+    
+    -- Add character-specific packs after shared packs
+    local charPacks = Mountie.GetCharacterPacks()
+    for _, pack in ipairs(charPacks) do
+        local mountInPack = IsMountInPack(mountID, pack.name)  
+        table.insert(packs, {
+            name = pack.name,
+            isShared = false,
+            text = pack.name .. " (Character)",
+            isInPack = mountInPack
+        })
     end
     
     return packs

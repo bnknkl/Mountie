@@ -102,24 +102,24 @@ function Mountie.SetCharacterPacks(packs)
     MountieDB.characters[charKey].packs = packs
 end
 
--- Get all packs available to current character (character-specific + shared)
+-- Get all packs available to current character (shared + character-specific)
 function Mountie.GetAllAvailablePacks()
     InitializeCharacterData()
     local allPacks = {}
+    
+    -- Add shared packs first (higher priority)
+    if MountieDB.sharedPacks then
+        for _, pack in ipairs(MountieDB.sharedPacks) do
+            pack.isShared = true -- Mark as shared
+            table.insert(allPacks, pack)
+        end
+    end
     
     -- Add character-specific packs
     local charPacks = Mountie.GetCharacterPacks()
     for _, pack in ipairs(charPacks) do
         pack.isShared = false -- Mark as character-specific
         table.insert(allPacks, pack)
-    end
-    
-    -- Add shared packs
-    if MountieDB.sharedPacks then
-        for _, pack in ipairs(MountieDB.sharedPacks) do
-            pack.isShared = true -- Mark as shared
-            table.insert(allPacks, pack)
-        end
     end
     
     return allPacks
@@ -188,24 +188,24 @@ function Mountie.TogglePackShared(packName)
     end
 end
 
--- Get a pack by name (searches both character and shared)
+-- Get a pack by name (searches shared first, then character-specific)
 function Mountie.GetPackByName(packName)
-    -- Check character-specific packs first
-    local charPacks = Mountie.GetCharacterPacks()
-    for _, pack in ipairs(charPacks) do
-        if pack.name == packName then
-            pack.isShared = false
-            return pack
-        end
-    end
-    
-    -- Check shared packs
+    -- Check shared packs first
     if MountieDB.sharedPacks then
         for _, pack in ipairs(MountieDB.sharedPacks) do
             if pack.name == packName then
                 pack.isShared = true
                 return pack
             end
+        end
+    end
+    
+    -- Check character-specific packs
+    local charPacks = Mountie.GetCharacterPacks()
+    for _, pack in ipairs(charPacks) do
+        if pack.name == packName then
+            pack.isShared = false
+            return pack
         end
     end
     

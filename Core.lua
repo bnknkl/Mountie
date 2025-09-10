@@ -33,14 +33,16 @@ function Mountie.CreatePack(name, description)
         mounts = {},
         conditions = {},
         created = time(),
-        isShared = false, -- New packs default to character-specific
+        isShared = true, -- New packs default to shared (account-wide)
         isFallback = false, -- New packs default to not being fallback
     }
 
-    local packs = Mountie.GetCharacterPacks()
-    table.insert(packs, newPack)
-    Mountie.SetCharacterPacks(packs)
-    Mountie.VerbosePrint("Pack added. Total packs: " .. #packs)
+    -- Add to shared storage by default
+    if not MountieDB.sharedPacks then
+        MountieDB.sharedPacks = {}
+    end
+    table.insert(MountieDB.sharedPacks, newPack)
+    Mountie.VerbosePrint("Shared pack added. Total shared packs: " .. #MountieDB.sharedPacks)
     return true, "Pack '" .. name .. "' created successfully"
 end
 
@@ -101,7 +103,7 @@ function Mountie.DuplicatePack(sourceName, newName, newDescription)
         mounts = {},
         conditions = {},
         created = time(),
-        isShared = false, -- New duplicated packs default to character-specific
+        isShared = true, -- New duplicated packs default to shared (account-wide)
         isFallback = false, -- New duplicated packs cannot be fallback (only one fallback allowed)
     }
     
@@ -131,10 +133,11 @@ function Mountie.DuplicatePack(sourceName, newName, newDescription)
         end
     end
     
-    -- Add duplicated pack to character packs (always character-specific)
-    local packs = Mountie.GetCharacterPacks()
-    table.insert(packs, duplicatedPack)
-    Mountie.SetCharacterPacks(packs)
+    -- Add duplicated pack to shared storage by default
+    if not MountieDB.sharedPacks then
+        MountieDB.sharedPacks = {}
+    end
+    table.insert(MountieDB.sharedPacks, duplicatedPack)
     
     Mountie.VerbosePrint("Pack '" .. sourceName .. "' duplicated as '" .. newName .. "' (" .. #duplicatedPack.mounts .. " mounts, " .. #duplicatedPack.conditions .. " conditions)")
     return true, "Pack '" .. sourceName .. "' duplicated as '" .. newName .. "'"
@@ -1719,6 +1722,82 @@ local function SlashHandler(msg)
             end
         end)
         
+    elseif command == "apply-transmog" then
+        if not args[2] then
+            Mountie.Print("Usage: /mountie apply-transmog <set_id>")
+            Mountie.Print("Apply a transmog set by its numeric ID (must be at transmog vendor)")
+            return
+        end
+        
+        local setID = tonumber(args[2])
+        if not setID then
+            Mountie.Print("Invalid set ID. Please provide a numeric set ID.")
+            return
+        end
+        
+        local success, message = Mountie.ApplyTransmogSet(setID)
+        Mountie.Print(message)
+    
+    elseif command == "debug-transmog" then
+        Mountie.Print("=== Transmog Debug Information ===")
+        
+        -- Test API availability
+        local apis = {
+            "C_TransmogCollection", "C_Transmog", "TransmogUtil", "C_TransmogSets"
+        }
+        for _, api in ipairs(apis) do
+            local available = _G[api] ~= nil
+            Mountie.Print(api .. ": " .. (available and "Available" or "Not Available"))
+        end
+        
+        -- Test transmog location creation
+        if TransmogUtil then
+            local success, testLoc = pcall(TransmogUtil.GetTransmogLocation, 1, Enum.TransmogType.Appearance, Enum.TransmogModification.Main)
+            Mountie.Print("TransmogLocation creation: " .. (success and "Success" or "Failed"))
+        end
+        
+        -- Test vendor status
+        local atVendor = C_Transmog and C_Transmog.IsAtTransmogNPC and C_Transmog.IsAtTransmogNPC()
+        Mountie.Print("At transmog vendor: " .. tostring(atVendor))
+        
+        -- Test current appearances
+        local appearances = GetCurrentAppearances()
+        local count = 0
+        for _ in pairs(appearances) do count = count + 1 end
+        Mountie.Print("Current appearances detected: " .. count .. " slots")
+        
+        -- Test transmog set cache
+        BuildTransmogSetCache()
+        local setCount = 0
+        for _ in pairs(transmogSetCache) do setCount = setCount + 1 end
+        Mountie.Print("Transmog sets in cache: " .. setCount)
+        
+        -- Test current set detection
+        local currentSetID = Mountie.GetCurrentTransmogSetID()
+        if currentSetID then
+            local setInfo = Mountie.GetTransmogSetInfo(currentSetID)
+            local setName = setInfo and setInfo.name or "Unknown"
+            Mountie.Print("Current set detected: " .. setName .. " (ID: " .. currentSetID .. ")")
+        else
+            Mountie.Print("No current transmog set detected")
+        end
+        
+        -- Check existing packs for transmog rules
+        local allPacks = Mountie.GetAllAvailablePacks()
+        local transmogPackCount = 0
+        for _, pack in ipairs(allPacks) do
+            if pack.conditions then
+                for _, rule in ipairs(pack.conditions) do
+                    if rule.type == "transmog" then
+                        transmogPackCount = transmogPackCount + 1
+                        Mountie.Print("Pack '" .. pack.name .. "' has transmog rule (Set ID: " .. rule.setID .. ")")
+                        break
+                    end
+                end
+            end
+        end
+        Mountie.Print("Packs with transmog rules: " .. transmogPackCount)
+    
     elseif command == "test-parse" then
         Mountie.Print("Parsed arguments:")
         for i, arg in ipairs(args) do
@@ -1821,6 +1900,8 @@ local function SlashHandler(msg)
         Mountie.Print("/mountie replace-transmog <pack> [name] [strictness] - Replace pack's transmog rules")
         Mountie.Print("/mountie update-transmog - Manually re-evaluate transmog rules")
         Mountie.Print("/mountie init-transmog - Initialize transmog system (run if detection not working)")
+        Mountie.Print("/mountie apply-transmog <set_id> - Apply transmog set by ID (must be at vendor)")
+        Mountie.Print("/mountie debug-transmog - Show transmog system debug information")
         Mountie.Print("/mountie debug-zone - Show detailed zone detection information")
         Mountie.Print("/mountie overlap-priority/intersection - Set overlap mode")
         Mountie.Print("/mountie flying-on/off - Toggle flying mount preference")
@@ -2019,6 +2100,94 @@ function Mountie.CheckTransmogRules()
     end
     
     return matchingPacks
+end
+
+-- Apply a transmog set by setID
+function Mountie.ApplyTransmogSet(setID)
+    -- Validation: Must be at transmog vendor
+    if not C_Transmog.IsAtTransmogNPC() then
+        return false, "Must be at a transmog vendor to apply sets"
+    end
+    
+    -- Get set information
+    local setInfo = Mountie.GetTransmogSetInfo(setID)
+    if not setInfo then
+        return false, "Transmog set not found"
+    end
+    
+    if not setInfo.appearances or next(setInfo.appearances) == nil then
+        return false, "No appearance data available for set '" .. (setInfo.name or "Unknown") .. "'"
+    end
+    
+    Mountie.Debug("Applying transmog set: " .. setInfo.name .. " (ID: " .. setID .. ")")
+    
+    -- Clear any existing pending changes first
+    C_Transmog.ClearAllPending()
+    
+    -- Apply each appearance in the set
+    local appliedSlots = 0
+    local totalSlots = 0
+    
+    for slotID, appearanceID in pairs(setInfo.appearances) do
+        totalSlots = totalSlots + 1
+        
+        -- Create transmog location for this slot
+        local success, transmogLocation = pcall(TransmogUtil.GetTransmogLocation, slotID, Enum.TransmogType.Appearance, Enum.TransmogModification.Main)
+        
+        if success and transmogLocation then
+            -- Check if we can transmog this slot
+            local canTransmog = C_Transmog.CanTransmogItem(transmogLocation)
+            if canTransmog then
+                -- Create pending info for applying this appearance
+                local pendingInfo = {
+                    type = Enum.TransmogPendingType.Apply,
+                    visualID = appearanceID
+                }
+                
+                -- Set the pending transmog change
+                local setPendingSuccess = pcall(C_Transmog.SetPending, transmogLocation, pendingInfo)
+                if setPendingSuccess then
+                    appliedSlots = appliedSlots + 1
+                    Mountie.Debug("Queued slot " .. slotID .. " with appearance " .. appearanceID)
+                else
+                    Mountie.Debug("Failed to queue slot " .. slotID .. " with appearance " .. appearanceID)
+                end
+            else
+                Mountie.Debug("Cannot transmog slot " .. slotID .. " - item may not be transmoggable")
+            end
+        else
+            Mountie.Debug("Failed to create TransmogLocation for slot " .. slotID)
+        end
+    end
+    
+    -- Apply all pending changes if we have any
+    if appliedSlots > 0 then
+        -- Get cost and warnings before applying
+        local cost = C_Transmog.GetApplyCost()
+        local warnings = C_Transmog.GetApplyWarnings()
+        
+        -- Show cost if applicable
+        if cost and cost > 0 then
+            Mountie.VerbosePrint("Transmog cost: " .. GetCoinTextureString(cost))
+        end
+        
+        -- Show warnings if any
+        if warnings and #warnings > 0 then
+            for _, warning in ipairs(warnings) do
+                Mountie.Print("Warning: " .. warning)
+            end
+        end
+        
+        -- Apply all pending changes
+        local applySuccess = pcall(C_Transmog.ApplyAllPending)
+        if applySuccess then
+            return true, "Applied " .. appliedSlots .. " of " .. totalSlots .. " pieces from '" .. setInfo.name .. "'"
+        else
+            return false, "Failed to apply transmog changes"
+        end
+    else
+        return false, "No pieces could be applied from set '" .. setInfo.name .. "'"
+    end
 end
 
 -- Initialize addon when loaded

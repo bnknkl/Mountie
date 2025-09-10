@@ -158,6 +158,41 @@ local function RebuildRulesList(container, pack)
             local setInfo = Mountie.GetTransmogSetInfo(rule.setID)
             local setName = setInfo and setInfo.name or ("SetID " .. tostring(rule.setID))
             text:SetText("Transmog: " .. setName)
+            
+            -- Add "Apply Set" button for transmog rules
+            local applyBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            applyBtn:SetSize(80, 18)
+            applyBtn:SetPoint("RIGHT", row, "RIGHT", -5, 0)
+            applyBtn:SetText("Apply Set")
+            
+            -- Tooltip for apply button
+            applyBtn:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Apply Transmog Set", 1, 1, 1, 1, true)
+                if C_Transmog.IsAtTransmogNPC() then
+                    GameTooltip:AddLine("Click to apply this transmog set immediately.", 1, 1, 0.8, true)
+                    GameTooltip:AddLine("Set: " .. setName, 0.8, 0.8, 1, true)
+                else
+                    GameTooltip:AddLine("Must be at a transmog vendor to apply sets.", 1, 0.5, 0.5, true)
+                end
+                GameTooltip:Show()
+            end)
+            applyBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            
+            -- Enable/disable based on vendor status
+            applyBtn:SetEnabled(C_Transmog.IsAtTransmogNPC())
+            
+            -- Apply button click handler
+            applyBtn:SetScript("OnClick", function()
+                if not C_Transmog.IsAtTransmogNPC() then
+                    Mountie.Print("Must be at a transmog vendor to apply sets")
+                    return
+                end
+                
+                local success, message = Mountie.ApplyTransmogSet(rule.setID)
+                Mountie.Print(message)
+            end)
+            
         elseif rule.type == "custom_transmog" then
             local transmogName = rule.transmogName or "Custom Transmog"
             local strictness = rule.strictness or 6
@@ -696,8 +731,22 @@ function MountieUI.ShowRulesDialog(pack)
                 self.transmogText:SetText(setName)
                 self.addTransmogBtn:SetEnabled(true)
             else
-                self.transmogText:SetText("None detected")
-                self.addTransmogBtn:SetEnabled(false)
+                -- Check if we can at least capture current appearance for custom transmog
+                local appearance = Mountie.CaptureCurrentAppearance(false)
+                local filledSlots = 0
+                if appearance then
+                    for slot, appearanceID in pairs(appearance) do
+                        if appearanceID then filledSlots = filledSlots + 1 end
+                    end
+                end
+                
+                if filledSlots >= 3 then
+                    self.transmogText:SetText("Custom transmog (" .. filledSlots .. " pieces)")
+                    self.addTransmogBtn:SetEnabled(true)
+                else
+                    self.transmogText:SetText("None detected")
+                    self.addTransmogBtn:SetEnabled(false)
+                end
             end
             
             if self.targetPack then
@@ -1327,10 +1376,57 @@ function MountieUI.CreateTransmogPicker(parentDialog)
     addBtn:SetText("Add Set")
     addBtn:SetEnabled(false)
 
+    -- Apply Set button
+    local applyBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
+    applyBtn:SetSize(80, 25)
+    applyBtn:SetPoint("RIGHT", addBtn, "LEFT", -10, 0)
+    applyBtn:SetText("Apply Set")
+    applyBtn:SetEnabled(false)
+    
+    -- Tooltip for apply button
+    applyBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Apply Transmog Set", 1, 1, 1, 1, true)
+        if picker.selectedSetID then
+            local setInfo = Mountie.GetTransmogSetInfo(picker.selectedSetID)
+            local setName = setInfo and setInfo.name or ("Set " .. picker.selectedSetID)
+            if C_Transmog.IsAtTransmogNPC() then
+                GameTooltip:AddLine("Apply '" .. setName .. "' immediately.", 1, 1, 0.8, true)
+            else
+                GameTooltip:AddLine("Must be at a transmog vendor.", 1, 0.5, 0.5, true)
+                GameTooltip:AddLine("Set: " .. setName, 0.8, 0.8, 1, true)
+            end
+        else
+            GameTooltip:AddLine("Select a set first.", 0.8, 0.8, 0.8, true)
+        end
+        GameTooltip:Show()
+    end)
+    applyBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    
+    -- Apply button click handler
+    applyBtn:SetScript("OnClick", function()
+        if not picker.selectedSetID then
+            Mountie.Print("Please select a transmog set first")
+            return
+        end
+        
+        if not C_Transmog.IsAtTransmogNPC() then
+            Mountie.Print("Must be at a transmog vendor to apply sets")
+            return
+        end
+        
+        local success, message = Mountie.ApplyTransmogSet(picker.selectedSetID)
+        Mountie.Print(message)
+        
+        if success then
+            picker:Hide()
+        end
+    end)
+
     -- Cancel button
     local cancelBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
     cancelBtn:SetSize(80, 25)
-    cancelBtn:SetPoint("RIGHT", addBtn, "LEFT", -10, 0)
+    cancelBtn:SetPoint("RIGHT", applyBtn, "LEFT", -10, 0)
     cancelBtn:SetText("Cancel")
     cancelBtn:SetScript("OnClick", function() picker:Hide() end)
 
@@ -1481,6 +1577,7 @@ function MountieUI.CreateTransmogPicker(parentDialog)
                 picker.selectedButton = btn
                 btn:SetBackdropColor(0.2, 0.4, 0.2, 0.8)
                 addBtn:SetEnabled(true)
+                applyBtn:SetEnabled(true)
             end)
 
             -- Hover effects
@@ -1570,6 +1667,7 @@ function MountieUI.CreateTransmogPicker(parentDialog)
         self.selectedSetID = nil
         self.selectedButton = nil
         addBtn:SetEnabled(false)
+        applyBtn:SetEnabled(false)
         searchBox:SetText("")
         PopulateSetList()
     end)
