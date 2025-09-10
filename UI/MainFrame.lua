@@ -71,11 +71,23 @@ function MountieUI.CreateSettingsPanel(parent)
         MountieDB.settings.preferFlyingMounts = self:GetChecked()
     end)
 
+    -- Verbose mode checkbox
+    local verboseCheck = CreateFrame("CheckButton", nil, settingsPanel, "UICheckButtonTemplate")
+    verboseCheck:SetPoint("LEFT", flyingCheck.text, "RIGHT", 40, 0)
+    verboseCheck.text = verboseCheck:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    verboseCheck.text:SetPoint("LEFT", verboseCheck, "RIGHT", 5, 0)
+    verboseCheck.text:SetText("Show summon messages")
+
+    verboseCheck:SetScript("OnClick", function(self)
+        MountieDB.settings.verboseMode = self:GetChecked()
+    end)
+
     -- Initialize settings
     settingsPanel:SetScript("OnShow", function()
         local overlapMode = MountieDB.settings.packOverlapMode or "priority"
         UpdateOverlapMode(overlapMode)
         flyingCheck:SetChecked(MountieDB.settings.preferFlyingMounts)
+        verboseCheck:SetChecked(MountieDB.settings.verboseMode)
     end)
 
     return settingsPanel

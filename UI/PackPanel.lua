@@ -126,7 +126,7 @@ function MountieUI.CreatePackFrame(parent, pack)
     -- Pack info (mount count, description, and rule count)
     local info = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     info:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -2)
-    info:SetPoint("RIGHT", frame, "RIGHT", -70, 0) -- Leave space for rules and delete buttons
+    info:SetPoint("RIGHT", frame, "RIGHT", -120, 0) -- Leave space for status text
     info:SetJustifyH("LEFT")
     
     local mountCount = #pack.mounts
@@ -153,13 +153,13 @@ function MountieUI.CreatePackFrame(parent, pack)
         
         local ruleDetails = {}
         if zoneRuleCount > 0 then
-            table.insert(ruleDetails, "|cff88ccff" .. zoneRuleCount .. " zone" .. (zoneRuleCount > 1 and "s" or "") .. "|r")
+            table.insert(ruleDetails, "|cff88ccff" .. zoneRuleCount .. " zone rule" .. (zoneRuleCount > 1 and "s" or "") .. "|r")
         end
         if transmogRuleCount > 0 then
-            table.insert(ruleDetails, "|cffcc88ff" .. transmogRuleCount .. " transmog" .. (transmogRuleCount > 1 and "s" or "") .. "|r")
+            table.insert(ruleDetails, "|cffcc88ff" .. transmogRuleCount .. " transmog rule" .. (transmogRuleCount > 1 and "s" or "") .. "|r")
         end
         if customTransmogRuleCount > 0 then
-            table.insert(ruleDetails, "|cffffaa88" .. customTransmogRuleCount .. " custom" .. (customTransmogRuleCount > 1 and "s" or "") .. "|r")
+            table.insert(ruleDetails, "|cffffaa88" .. customTransmogRuleCount .. " custom rule" .. (customTransmogRuleCount > 1 and "s" or "") .. "|r")
         end
         
         if #ruleDetails > 0 then
@@ -171,197 +171,23 @@ function MountieUI.CreatePackFrame(parent, pack)
     info:SetTextColor(0.8, 0.8, 0.8, 1)
     frame.infoText = info
     
-    -- Rules button (gear/settings icon)
-    local rulesButton = CreateFrame("Button", nil, frame)
-    rulesButton:SetSize(20, 20)
-    rulesButton:SetPoint("RIGHT", frame, "RIGHT", -33, 0) -- Position left of delete button
-    rulesButton:SetNormalTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Up")
-    rulesButton:SetHighlightTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Highlight") 
-    rulesButton:SetPushedTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Down")
-
-    rulesButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Pack Rules", 1, 1, 1)
-        GameTooltip:AddLine("Configure when this pack activates", 1, 0.8, 0.8)
-        GameTooltip:Show()
-    end)
-
-    rulesButton:SetScript("OnLeave", function(self)
-        GameTooltip:Hide()
-    end)
-
-    rulesButton:SetScript("OnClick", function(self)
-        MountieUI.ShowRulesDialog(pack)
-    end)
+    -- Status indicator (shows fallback/shared status)
+    local statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    statusText:SetPoint("RIGHT", frame, "RIGHT", -8, 0)
+    statusText:SetJustifyH("RIGHT")
     
-    -- Share toggle button (account-wide vs character-specific)
-    local shareButton = CreateFrame("Button", nil, frame)
-    shareButton:SetSize(20, 20)
-    shareButton:SetPoint("RIGHT", frame, "RIGHT", -83, 0) -- Position left of rules button
-    
-    -- Set icon based on pack's shared status
-    local function updateShareIcon()
-        if pack.isShared then
-            -- Create three person silhouettes for account-wide sharing
-            shareButton:SetNormalTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
-            shareButton:SetHighlightTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
-            shareButton:SetPushedTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
-            
-            -- Create two additional silhouettes to the left
-            if not shareButton.extraIcon1 then
-                shareButton.extraIcon1 = shareButton:CreateTexture(nil, "OVERLAY")
-                shareButton.extraIcon1:SetSize(16, 16)
-                shareButton.extraIcon1:SetPoint("RIGHT", shareButton, "LEFT", 2, 0)
-                shareButton.extraIcon1:SetTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
-                shareButton.extraIcon1:SetAlpha(0.8) -- Slightly transparent
-            end
-            
-            if not shareButton.extraIcon2 then
-                shareButton.extraIcon2 = shareButton:CreateTexture(nil, "OVERLAY")
-                shareButton.extraIcon2:SetSize(14, 14)
-                shareButton.extraIcon2:SetPoint("RIGHT", shareButton.extraIcon1, "LEFT", 2, 0)
-                shareButton.extraIcon2:SetTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
-                shareButton.extraIcon2:SetAlpha(0.6) -- More transparent, smaller
-            end
-            
-            shareButton.extraIcon1:Show()
-            shareButton.extraIcon2:Show()
-        else
-            -- Single person silhouette for character-specific
-            shareButton:SetNormalTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
-            shareButton:SetHighlightTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
-            shareButton:SetPushedTexture("Interface\\FriendsFrame\\UI-Toast-FriendOnlineIcon")
-            
-            -- Hide extra icons if they exist
-            if shareButton.extraIcon1 then
-                shareButton.extraIcon1:Hide()
-            end
-            if shareButton.extraIcon2 then
-                shareButton.extraIcon2:Hide()
-            end
-        end
-    end
-    updateShareIcon()
-    
-    shareButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        if pack.isShared then
-            GameTooltip:SetText("Account-Wide Pack", 1, 1, 1)
-            GameTooltip:AddLine("This pack is shared across all characters", 0.5, 1, 0.5)
-            GameTooltip:AddLine("Click to make character-specific", 1, 0.8, 0.8)
-        else
-            GameTooltip:SetText("Character-Specific Pack", 1, 1, 1)
-            GameTooltip:AddLine("This pack is only available on this character", 1, 1, 0.5)
-            GameTooltip:AddLine("Click to share account-wide", 1, 0.8, 0.8)
-        end
-        GameTooltip:Show()
-    end)
-
-    shareButton:SetScript("OnLeave", function(self)
-        GameTooltip:Hide()
-    end)
-
-    shareButton:SetScript("OnClick", function(self)
-        local success, message = Mountie.TogglePackShared(pack.name)
-        if success then
-            Mountie.Print(message)
-            -- Update the icon
-            updateShareIcon()
-            -- Refresh the pack list to reflect changes
-            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
-                _G.MountieMainFrame.packPanel.refreshPacks()
-            end
-        else
-            Mountie.Print("Error: " .. message)
-        end
-    end)
-    
-    -- Fallback toggle button
-    local fallbackButton = CreateFrame("Button", nil, frame)
-    fallbackButton:SetSize(20, 20)
-    fallbackButton:SetPoint("RIGHT", frame, "RIGHT", -133, 0) -- Position left of share button with space for extra icons
-    
-    -- Set icon based on pack's fallback status
-    local function updateFallbackIcon()
+    local function updateStatusDisplay()
+        local status = {}
         if pack.isFallback then
-            fallbackButton:SetNormalTexture("Interface\\Icons\\Ability_Mount_RidingHorse")
-            fallbackButton:SetHighlightTexture("Interface\\Icons\\Ability_Mount_RidingHorse")
-            fallbackButton:SetPushedTexture("Interface\\Icons\\Ability_Mount_RidingHorse")
-            -- Add a gold tint for active fallback
-            fallbackButton:GetNormalTexture():SetVertexColor(1, 1, 0, 1)
-            fallbackButton:GetHighlightTexture():SetVertexColor(1, 1, 0.5, 1)
-        else
-            fallbackButton:SetNormalTexture("Interface\\Icons\\Ability_Mount_RidingHorse")
-            fallbackButton:SetHighlightTexture("Interface\\Icons\\Ability_Mount_RidingHorse")
-            fallbackButton:SetPushedTexture("Interface\\Icons\\Ability_Mount_RidingHorse")
-            -- Gray tint for inactive fallback
-            fallbackButton:GetNormalTexture():SetVertexColor(0.5, 0.5, 0.5, 1)
-            fallbackButton:GetHighlightTexture():SetVertexColor(0.7, 0.7, 0.7, 1)
+            table.insert(status, "|cFFFFD700Fallback|r")
         end
+        if pack.isShared then
+            table.insert(status, "|cFF87CEFAShared|r")
+        end
+        statusText:SetText(table.concat(status, " "))
     end
-    updateFallbackIcon()
-    
-    fallbackButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        if pack.isFallback then
-            GameTooltip:SetText("Fallback Pack", 1, 1, 1)
-            GameTooltip:AddLine("This pack is used when no rules match", 1, 1, 0.5)
-            GameTooltip:AddLine("Click to remove fallback status", 1, 0.8, 0.8)
-        else
-            GameTooltip:SetText("Set as Fallback", 1, 1, 1)
-            GameTooltip:AddLine("Use this pack when no rules match", 0.8, 0.8, 1)
-            GameTooltip:AddLine("Click to set as fallback pack", 1, 0.8, 0.8)
-        end
-        GameTooltip:Show()
-    end)
-
-    fallbackButton:SetScript("OnLeave", function(self)
-        GameTooltip:Hide()
-    end)
-
-    fallbackButton:SetScript("OnClick", function(self)
-        local success, message = Mountie.TogglePackFallback(pack.name)
-        if success then
-            updateFallbackIcon()
-            -- Refresh all pack frames to update fallback status display
-            if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
-                _G.MountieMainFrame.packPanel.refreshPacks()
-            end
-        else
-            Mountie.Print("Error: " .. message)
-        end
-    end)
-    
-    -- Delete button (trash icon)
-    local deleteButton = CreateFrame("Button", nil, frame)
-    deleteButton:SetSize(20, 20)
-    deleteButton:SetPoint("RIGHT", frame, "RIGHT", -8, 0)
-    deleteButton:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
-    deleteButton:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight")
-    deleteButton:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
-    
-    -- Delete button styling and functionality
-    local deleteIcon = deleteButton:CreateTexture(nil, "OVERLAY")
-    deleteIcon:SetAllPoints(deleteButton)
-    deleteIcon:SetTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
-    deleteIcon:SetTexCoord(0, 1, 0, 1)
-    
-    deleteButton:SetScript("OnEnter", function(self)
-        deleteIcon:SetVertexColor(1, 0.3, 0.3, 1) -- Red tint on hover
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Delete Pack", 1, 1, 1)
-        GameTooltip:AddLine("This will permanently delete this pack", 1, 0.8, 0.8)
-        GameTooltip:Show()
-    end)
-    
-    deleteButton:SetScript("OnLeave", function(self)
-        deleteIcon:SetVertexColor(1, 1, 1, 1) -- Normal color
-        GameTooltip:Hide()
-    end)
-    
-    deleteButton:SetScript("OnClick", function(self)
-        MountieUI.ShowDeleteConfirmation(pack)
-    end)
+    updateStatusDisplay()
+    frame.updateStatusDisplay = updateStatusDisplay
     
     -- Hover effects for the main frame (simple color change for text)
     frame:EnableMouse(true)
@@ -371,17 +197,33 @@ function MountieUI.CreatePackFrame(parent, pack)
         -- Check if a mount is being dragged
         if MountieUI.IsMountBeingDragged() then
             self.nameText:SetTextColor(0.5, 1, 0.5, 1) -- Green when drag target
+        else
+            -- Show tooltip with instructions
+            GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
+            GameTooltip:SetText(pack.name, 1, 1, 1)
+            if pack.description and pack.description ~= "" then
+                GameTooltip:AddLine(pack.description, 1, 1, 0.8, true)
+            end
+            GameTooltip:AddLine(" ", 1, 1, 1)
+            GameTooltip:AddLine("Left-click: Expand/collapse", 0.8, 0.8, 0.8)
+            GameTooltip:AddLine("Right-click: Pack options", 0.8, 0.8, 0.8)
+            GameTooltip:Show()
         end
     end)
     
     frame:SetScript("OnLeave", function(self)
         self.nameText:SetTextColor(1, 1, 0.8, 1) -- Back to yellow
+        GameTooltip:Hide()
     end)
     
-    -- Click handler for expanding/collapsing
+    -- Click handler for expanding/collapsing and context menu
     frame:SetScript("OnMouseUp", function(self, button)
         if button == "LeftButton" then
             MountieUI.TogglePackExpansion(self, pack)
+        elseif button == "RightButton" then
+            local x, y = GetCursorPosition()
+            local scale = UIParent:GetEffectiveScale()
+            MountieUI.ShowPackContextMenu(pack, x / scale, y / scale)
         end
     end)
     
@@ -500,7 +342,7 @@ function MountieUI.TogglePackExpansion(packFrame, pack)
             -- Add pack info
             local info = expandedContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
             info:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -2)
-            info:SetPoint("RIGHT", expandedContent, "RIGHT", -70, 0) -- Leave space for Rules button
+            info:SetPoint("RIGHT", expandedContent, "RIGHT", -8, 0) -- Use full width now
             info:SetJustifyH("LEFT")
             
             local mountCount = #pack.mounts
@@ -515,35 +357,22 @@ function MountieUI.TogglePackExpansion(packFrame, pack)
             info:SetTextColor(0.8, 0.8, 0.8, 1)
             expandedContent.infoText = info
             
-            -- Add Rules button (gear/settings icon) - same as in normal pack view
-            local rulesButton = CreateFrame("Button", nil, expandedContent)
-            rulesButton:SetSize(20, 20)
-            rulesButton:SetPoint("TOPRIGHT", expandedContent, "TOPRIGHT", -8, -8) -- Top right corner
-            rulesButton:SetNormalTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Up")
-            rulesButton:SetHighlightTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Highlight") 
-            rulesButton:SetPushedTexture("Interface\\Buttons\\UI-GuildButton-PublicNote-Down")
-
-            rulesButton:SetScript("OnEnter", function(self)
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetText("Pack Rules", 1, 1, 1)
-                GameTooltip:AddLine("Configure when this pack activates", 1, 0.8, 0.8)
-                GameTooltip:Show()
-            end)
-
-            rulesButton:SetScript("OnLeave", function(self)
-                GameTooltip:Hide()
-            end)
-
-            rulesButton:SetScript("OnClick", function(self)
-                MountieUI.ShowRulesDialog(pack)
-            end)
+            -- Add tip text for ctrl+click removal
+            local tipText = expandedContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            tipText:SetPoint("TOPLEFT", info, "BOTTOMLEFT", 0, -2)
+            tipText:SetText("|cffaaaaaa(Ctrl+Click to remove mount)|r")
+            tipText:SetTextColor(0.7, 0.7, 0.7, 1)
             
-            -- Add click handler to collapse - this was the key issue
+            -- Add click handler to collapse and show context menu
             expandedContent:EnableMouse(true)
             expandedContent:SetScript("OnMouseUp", function(self, button)
                 if button == "LeftButton" then
                     -- Call toggle again, but it will detect we're expanded and collapse
                     MountieUI.TogglePackExpansion(self, pack)
+                elseif button == "RightButton" then
+                    local x, y = GetCursorPosition()
+                    local scale = UIParent:GetEffectiveScale()
+                    MountieUI.ShowPackContextMenu(pack, x / scale, y / scale)
                 end
             end)
             
@@ -568,7 +397,7 @@ function MountieUI.TogglePackExpansion(packFrame, pack)
                     return a.name < b.name 
                 end)
                 
-                local yOffset = -35 -- Start below the info text
+                local yOffset = -50 -- Start below the info text and tip
                 for i, mountData in ipairs(sortedMounts) do
                     local mountFrame = CreateFrame("Frame", nil, expandedContent)
                     mountFrame:SetSize(280, 28)
@@ -594,21 +423,76 @@ function MountieUI.TogglePackExpansion(packFrame, pack)
                     mountName:SetText(mountData.name)
                     mountName:SetTextColor(0.9, 0.9, 0.9, 1)
                     
+                    -- Add click functionality for mount removal
+                    mountFrame:EnableMouse(true)
+                    mountFrame:SetScript("OnMouseUp", function(self, button)
+                        if button == "LeftButton" and IsControlKeyDown() then
+                            -- Remove mount from pack
+                            local success, message = Mountie.RemoveMountFromPack(pack.name, mountData.id)
+                            if success then
+                                Mountie.VerbosePrint("Removed " .. mountData.name .. " from pack " .. pack.name)
+                                -- Refresh the expanded view to show updated mount list
+                                MountieUI.TogglePackExpansion(expandedContent, pack) -- Collapse
+                                MountieUI.TogglePackExpansion(expandedContent, pack) -- Re-expand
+                            else
+                                Mountie.Print("Error: " .. message)
+                            end
+                        end
+                    end)
+                    
+                    -- Add hover effect for better feedback
+                    local isHovering = false
+                    
+                    local function updateHoverState()
+                        if isHovering then
+                            if IsControlKeyDown() then
+                                -- Red background and text for deletion mode
+                                mountBg:SetColorTexture(0.4, 0.1, 0.1, 0.8) -- Red background
+                                mountName:SetTextColor(1, 0.8, 0.8, 1) -- Light red text
+                            else
+                                -- Normal hover state
+                                mountBg:SetColorTexture(0.1, 0.1, 0.2, 0.8) -- Blue background
+                                mountName:SetTextColor(1, 1, 1, 1) -- Bright white text
+                            end
+                        else
+                            -- Normal state
+                            mountBg:SetColorTexture(0.05, 0.05, 0.15, 0.6) -- Dark background
+                            mountName:SetTextColor(0.9, 0.9, 0.9, 1) -- Gray text
+                        end
+                    end
+                    
+                    mountFrame:SetScript("OnEnter", function(self)
+                        isHovering = true
+                        updateHoverState()
+                    end)
+                    
+                    mountFrame:SetScript("OnLeave", function(self)
+                        isHovering = false
+                        updateHoverState()
+                    end)
+                    
+                    -- Add key state change detection
+                    mountFrame:SetScript("OnUpdate", function(self)
+                        if isHovering then
+                            updateHoverState()
+                        end
+                    end)
+                    
                     mountFrame:Show()
                     expandedContent.mountFrames[i] = mountFrame
                     yOffset = yOffset - 29 -- Move down for next mount
                 end
                 
                 -- Resize the content to fit all mounts
-                local contentHeight = 35 + (#sortedMounts * 29) + 10 -- header + mounts + padding
+                local contentHeight = 50 + (#sortedMounts * 29) + 10 -- header + tip + mounts + padding
                 expandedContent:SetHeight(contentHeight)
             else
                 -- No mounts
                 local noMountsText = expandedContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                noMountsText:SetPoint("TOPLEFT", info, "BOTTOMLEFT", 8, -4)
+                noMountsText:SetPoint("TOPLEFT", tipText, "BOTTOMLEFT", 8, -4)
                 noMountsText:SetText("No mounts in this pack")
                 noMountsText:SetTextColor(0.6, 0.6, 0.6, 1)
-                expandedContent:SetHeight(80)
+                expandedContent:SetHeight(95)
             end
             
             -- Store reference to the scroll frame (not content)
@@ -871,6 +755,13 @@ function MountieUI.ShowDeleteConfirmation(pack)
     deleteConfirmDialog.targetPack = pack
     deleteConfirmDialog.packNameText:SetText('"' .. pack.name .. '"')
     deleteConfirmDialog:Show()
+end
+
+-- Helper function for duplicate confirmation
+function MountieUI.ShowDuplicateDialog(pack)
+    local duplicateDialog = MountieUI.CreateDuplicatePackDialog()
+    duplicateDialog.sourcePack = pack
+    duplicateDialog:Show()
 end
 
 -- Helper function to check if a mount is being dragged

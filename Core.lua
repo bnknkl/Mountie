@@ -70,6 +70,76 @@ function Mountie.DeletePack(name)
     return false, "Pack '" .. name .. "' not found"
 end
 
+function Mountie.DuplicatePack(sourceName, newName, newDescription)
+    if not sourceName or sourceName == "" then
+        return false, "Source pack name cannot be empty"
+    end
+    
+    if not newName or newName == "" then
+        return false, "New pack name cannot be empty"
+    end
+    
+    Mountie.Debug("DuplicatePack called - source: " .. sourceName .. ", new: " .. newName)
+    
+    -- Check if new name already exists
+    local existingPack = Mountie.GetPackByName(newName)
+    if existingPack then
+        local location = existingPack.isShared and "shared" or "character-specific"
+        return false, "Pack '" .. newName .. "' already exists (" .. location .. ")"
+    end
+    
+    -- Find source pack to duplicate
+    local sourcePack = Mountie.GetPackByName(sourceName)
+    if not sourcePack then
+        return false, "Source pack '" .. sourceName .. "' not found"
+    end
+    
+    -- Create deep copy of the source pack
+    local duplicatedPack = {
+        name = newName,
+        description = newDescription or (sourcePack.description .. " (Copy)"),
+        mounts = {},
+        conditions = {},
+        created = time(),
+        isShared = false, -- New duplicated packs default to character-specific
+        isFallback = false, -- New duplicated packs cannot be fallback (only one fallback allowed)
+    }
+    
+    -- Deep copy mounts
+    if sourcePack.mounts then
+        for _, mountID in ipairs(sourcePack.mounts) do
+            table.insert(duplicatedPack.mounts, mountID)
+        end
+    end
+    
+    -- Deep copy conditions
+    if sourcePack.conditions then
+        for _, condition in ipairs(sourcePack.conditions) do
+            local newCondition = {}
+            for key, value in pairs(condition) do
+                if type(value) == "table" then
+                    -- Deep copy nested tables (like transmog data)
+                    newCondition[key] = {}
+                    for k, v in pairs(value) do
+                        newCondition[key][k] = v
+                    end
+                else
+                    newCondition[key] = value
+                end
+            end
+            table.insert(duplicatedPack.conditions, newCondition)
+        end
+    end
+    
+    -- Add duplicated pack to character packs (always character-specific)
+    local packs = Mountie.GetCharacterPacks()
+    table.insert(packs, duplicatedPack)
+    Mountie.SetCharacterPacks(packs)
+    
+    Mountie.VerbosePrint("Pack '" .. sourceName .. "' duplicated as '" .. newName .. "' (" .. #duplicatedPack.mounts .. " mounts, " .. #duplicatedPack.conditions .. " conditions)")
+    return true, "Pack '" .. sourceName .. "' duplicated as '" .. newName .. "'"
+end
+
 function Mountie.GetPack(name)
     return Mountie.GetPackByName(name)
 end
@@ -1027,7 +1097,7 @@ function Mountie.MountActive()
     -- Summon the selected mount
     local name = C_MountJournal.GetMountInfoByID(mountID)
     Mountie.Debug("Summoning mount: " .. (name or "Unknown") .. packInfo)
-    Mountie.Print("Summoned " .. (name or "Unknown") .. packInfo)
+    Mountie.VerbosePrint("Summoned " .. (name or "Unknown") .. packInfo)
     C_MountJournal.SummonByID(mountID)
     return true
 end
