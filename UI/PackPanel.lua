@@ -153,13 +153,13 @@ function MountieUI.CreatePackFrame(parent, pack)
         
         local ruleDetails = {}
         if zoneRuleCount > 0 then
-            table.insert(ruleDetails, "|cff88ccff" .. zoneRuleCount .. " zone|r")
+            table.insert(ruleDetails, "|cff88ccff" .. zoneRuleCount .. " zone" .. (zoneRuleCount > 1 and "s" or "") .. "|r")
         end
         if transmogRuleCount > 0 then
-            table.insert(ruleDetails, "|cffcc88ff" .. transmogRuleCount .. " transmog|r")
+            table.insert(ruleDetails, "|cffcc88ff" .. transmogRuleCount .. " transmog" .. (transmogRuleCount > 1 and "s" or "") .. "|r")
         end
         if customTransmogRuleCount > 0 then
-            table.insert(ruleDetails, "|cffffaa88" .. customTransmogRuleCount .. " custom|r")
+            table.insert(ruleDetails, "|cffffaa88" .. customTransmogRuleCount .. " custom" .. (customTransmogRuleCount > 1 and "s" or "") .. "|r")
         end
         
         if #ruleDetails > 0 then
@@ -197,7 +197,7 @@ function MountieUI.CreatePackFrame(parent, pack)
     -- Share toggle button (account-wide vs character-specific)
     local shareButton = CreateFrame("Button", nil, frame)
     shareButton:SetSize(20, 20)
-    shareButton:SetPoint("RIGHT", frame, "RIGHT", -58, 0) -- Position left of rules button
+    shareButton:SetPoint("RIGHT", frame, "RIGHT", -83, 0) -- Position left of rules button
     
     -- Set icon based on pack's shared status
     local function updateShareIcon()
@@ -279,7 +279,7 @@ function MountieUI.CreatePackFrame(parent, pack)
     -- Fallback toggle button
     local fallbackButton = CreateFrame("Button", nil, frame)
     fallbackButton:SetSize(20, 20)
-    fallbackButton:SetPoint("RIGHT", frame, "RIGHT", -83, 0) -- Position left of share button
+    fallbackButton:SetPoint("RIGHT", frame, "RIGHT", -133, 0) -- Position left of share button with space for extra icons
     
     -- Set icon based on pack's fallback status
     local function updateFallbackIcon()

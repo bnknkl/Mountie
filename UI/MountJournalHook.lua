@@ -241,6 +241,9 @@ function MountJournalHook.Initialize()
                 if button and elementData and elementData.mountID then
                     button.mountID = elementData.mountID
                     
+                    -- Store the original OnClick handler
+                    local originalOnClick = button:GetScript("OnClick")
+                    
                     button:SetScript("OnClick", function(self, mouseButton, down)
                         if mouseButton == "RightButton" and not down then
                             local mountID = self.mountID
@@ -255,10 +258,10 @@ function MountJournalHook.Initialize()
                                 
                                 return
                             end
-                        elseif mouseButton == "LeftButton" and not down then
-                            local mountID = self.mountID
-                            if mountID then
-                                C_MountJournal.SummonByID(mountID)
+                        else
+                            -- For all other clicks (including left-click), use the original behavior
+                            if originalOnClick then
+                                originalOnClick(self, mouseButton, down)
                             end
                         end
                     end)
