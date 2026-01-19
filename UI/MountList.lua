@@ -1006,15 +1006,7 @@ function MountieUI.ShowMountTooltipWithModel(parent, mountData)
         -- Create 3D model frame
         mountTooltip.model = CreateFrame("PlayerModel", nil, mountTooltip)
         mountTooltip.model:SetPoint("TOPLEFT", mountTooltip.nameText, "BOTTOMLEFT", -50, -10)
-        mountTooltip.model:SetPoint("BOTTOMRIGHT", mountTooltip, "BOTTOMRIGHT", -10, 30)
-        
-        -- Mount source/details
-        mountTooltip.sourceText = mountTooltip:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        mountTooltip.sourceText:SetPoint("BOTTOM", mountTooltip, "BOTTOM", 0, 10)
-        mountTooltip.sourceText:SetPoint("LEFT", mountTooltip, "LEFT", 10, 0)
-        mountTooltip.sourceText:SetPoint("RIGHT", mountTooltip, "RIGHT", -10, 0)
-        mountTooltip.sourceText:SetJustifyH("CENTER")
-        mountTooltip.sourceText:SetTextColor(0.8, 0.8, 0.8, 1)
+        mountTooltip.model:SetPoint("BOTTOMRIGHT", mountTooltip, "BOTTOMRIGHT", -10, 10)
     end
     
     -- Position tooltip near the parent button
@@ -1023,18 +1015,6 @@ function MountieUI.ShowMountTooltipWithModel(parent, mountData)
     
     -- Set mount information
     mountTooltip.nameText:SetText(mountData.name or "Unknown Mount")
-    
-    -- Set source information
-    local sourceText = ""
-    if mountData.sourceType then
-        sourceText = mountData.sourceType
-        if mountData.isCollected then
-            sourceText = sourceText .. " (Collected)"
-        else
-            sourceText = sourceText .. " (Not Collected)"
-        end
-    end
-    mountTooltip.sourceText:SetText(sourceText)
     
     -- Set the 3D model
     local creatureDisplayInfoID = C_MountJournal.GetMountInfoExtraByID(mountData.id)

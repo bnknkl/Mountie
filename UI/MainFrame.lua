@@ -26,43 +26,34 @@ function MountieUI.CreateSettingsPanel(parent)
     overlapLabel:SetPoint("TOPLEFT", settingsTitle, "BOTTOMLEFT", 0, -10)
     overlapLabel:SetText("When multiple packs match:")
 
-    local priorityRadio = CreateFrame("CheckButton", nil, settingsPanel, "UIRadioButtonTemplate")
-    priorityRadio:SetPoint("TOPLEFT", overlapLabel, "BOTTOMLEFT", 0, -5)
-    priorityRadio.text = priorityRadio:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    priorityRadio.text:SetPoint("LEFT", priorityRadio, "RIGHT", 5, 0)
-    priorityRadio.text:SetText("Use highest priority pack only")
+    local unionRadio = CreateFrame("CheckButton", nil, settingsPanel, "UIRadioButtonTemplate")
+    unionRadio:SetPoint("TOPLEFT", overlapLabel, "BOTTOMLEFT", 0, -5)
+    unionRadio.text = unionRadio:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    unionRadio.text:SetPoint("LEFT", unionRadio, "RIGHT", 5, 0)
+    unionRadio.text:SetText("Use mounts from any matching pack")
 
     local intersectionRadio = CreateFrame("CheckButton", nil, settingsPanel, "UIRadioButtonTemplate")
-    intersectionRadio:SetPoint("TOPLEFT", priorityRadio, "BOTTOMLEFT", 0, -5)
+    intersectionRadio:SetPoint("TOPLEFT", unionRadio, "BOTTOMLEFT", 0, -5)
     intersectionRadio.text = intersectionRadio:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     intersectionRadio.text:SetPoint("LEFT", intersectionRadio, "RIGHT", 5, 0)
     intersectionRadio.text:SetText("Use mounts common to all matching packs")
 
-    local unionRadio = CreateFrame("CheckButton", nil, settingsPanel, "UIRadioButtonTemplate")
-    unionRadio:SetPoint("TOPLEFT", intersectionRadio, "BOTTOMLEFT", 0, -5)
-    unionRadio.text = unionRadio:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    unionRadio.text:SetPoint("LEFT", unionRadio, "RIGHT", 5, 0)
-    unionRadio.text:SetText("Use mounts from any matching pack")
-    -- TODO: this could use a better description, "union" might be confusing to users
-
     -- Radio button behavior
     local function UpdateOverlapMode(mode)
         MountieDB.settings.packOverlapMode = mode
-        priorityRadio:SetChecked(mode == "priority")
-        intersectionRadio:SetChecked(mode == "intersection")
         unionRadio:SetChecked(mode == "union")
-        
+        intersectionRadio:SetChecked(mode == "intersection")
+
         -- Re-evaluate active packs
         C_Timer.After(0.1, Mountie.SelectActivePack)
     end
 
-    priorityRadio:SetScript("OnClick", function() UpdateOverlapMode("priority") end)
-    intersectionRadio:SetScript("OnClick", function() UpdateOverlapMode("intersection") end)
     unionRadio:SetScript("OnClick", function() UpdateOverlapMode("union") end)
+    intersectionRadio:SetScript("OnClick", function() UpdateOverlapMode("intersection") end)
 
     -- Flying preference (existing setting, moved here)
     local flyingCheck = CreateFrame("CheckButton", nil, settingsPanel, "UICheckButtonTemplate")
-    flyingCheck:SetPoint("LEFT", unionRadio.text, "RIGHT", 40, 0)
+    flyingCheck:SetPoint("LEFT", intersectionRadio.text, "RIGHT", 40, 0)
     flyingCheck.text = flyingCheck:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     flyingCheck.text:SetPoint("LEFT", flyingCheck, "RIGHT", 5, 0)
     flyingCheck.text:SetText("Prefer flying mounts")
@@ -84,46 +75,13 @@ function MountieUI.CreateSettingsPanel(parent)
 
     -- Initialize settings
     settingsPanel:SetScript("OnShow", function()
-        local overlapMode = MountieDB.settings.packOverlapMode or "priority"
+        local overlapMode = MountieDB.settings.packOverlapMode or "union"
         UpdateOverlapMode(overlapMode)
         flyingCheck:SetChecked(MountieDB.settings.preferFlyingMounts)
         verboseCheck:SetChecked(MountieDB.settings.verboseMode)
     end)
 
     return settingsPanel
-end
-
--- Function to create or update the Mountie macro
-local function EnsureMountieMacro()
-    local macroName = "Mountie"
-    local macroBody = "/mountie mount"
-    local macroIcon = "Interface\\Icons\\Ability_Mount_RidingHorse"
-    
-    -- Check if macro already exists
-    local macroIndex = GetMacroIndexByName(macroName)
-    
-    if macroIndex == 0 then
-        -- Macro doesn't exist, try to create it
-        local numAccountMacros, numCharacterMacros = GetNumMacros()
-        
-        -- Try account macros first (they're shared across characters)
-        if numAccountMacros < MAX_ACCOUNT_MACROS then
-            CreateMacro(macroName, macroIcon, macroBody, nil) -- nil = account macro
-            Mountie.Debug("Created account macro: " .. macroName)
-        elseif numCharacterMacros < MAX_CHARACTER_MACROS then
-            CreateMacro(macroName, macroIcon, macroBody, 1) -- 1 = character-specific macro
-            Mountie.Debug("Created character macro: " .. macroName)
-        else
-            Mountie.Print("Cannot create macro - macro slots full!")
-            return false
-        end
-    else
-        -- Macro exists, update it to make sure it has the right content
-        EditMacro(macroIndex, macroName, macroIcon, macroBody)
-        Mountie.Debug("Updated existing macro: " .. macroName)
-    end
-    
-    return true
 end
 
 function MountieUI.CreateMainFrame()
@@ -151,16 +109,16 @@ function MountieUI.CreateMainFrame()
     frame.settingsPanel = settingsPanel
 
     -- Create instructional text for action bar macro
-    local macroInstructions = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    macroInstructions:SetPoint("BOTTOM", settingsPanel, "BOTTOM", 0, -11) -- Below the settings panel
-    macroInstructions:SetText("Create a macro with |cff00ff00/mountie mount|r and add it to your action bar!")
-    macroInstructions:SetTextColor(0.8, 0.8, 0.8, 1)
-    
-    -- Add version number in bottom right corner
+    local macroInstructions = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    macroInstructions:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 8)
+    macroInstructions:SetText("Create a macro with |cff00ff00/mountie mount|r for your action bar")
+    macroInstructions:SetTextColor(0.7, 0.7, 0.7, 1)
+
+    -- Add version number in bottom left corner
     local versionText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    versionText:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 5)
+    versionText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 8)
     versionText:SetText("v" .. (Mountie.version or "0.6"))
-    versionText:SetTextColor(0.6, 0.6, 0.6, 0.8)
+    versionText:SetTextColor(0.5, 0.5, 0.5, 0.8)
 
     -- Left panel (mounts)
     local mountPanel = CreateFrame("Frame", nil, frame, "BackdropTemplate")

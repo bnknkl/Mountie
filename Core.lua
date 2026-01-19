@@ -33,16 +33,15 @@ function Mountie.CreatePack(name, description)
         mounts = {},
         conditions = {},
         created = time(),
-        isShared = true, -- New packs default to shared (account-wide)
+        isShared = false, -- New packs default to character-specific
         isFallback = false, -- New packs default to not being fallback
     }
 
-    -- Add to shared storage by default
-    if not MountieDB.sharedPacks then
-        MountieDB.sharedPacks = {}
-    end
-    table.insert(MountieDB.sharedPacks, newPack)
-    Mountie.VerbosePrint("Shared pack added. Total shared packs: " .. #MountieDB.sharedPacks)
+    -- Add to character-specific storage by default
+    local charPacks = Mountie.GetCharacterPacks()
+    table.insert(charPacks, newPack)
+    Mountie.SetCharacterPacks(charPacks)
+    Mountie.VerbosePrint("Character pack added. Total character packs: " .. #charPacks)
     return true, "Pack '" .. name .. "' created successfully"
 end
 
@@ -103,7 +102,7 @@ function Mountie.DuplicatePack(sourceName, newName, newDescription)
         mounts = {},
         conditions = {},
         created = time(),
-        isShared = true, -- New duplicated packs default to shared (account-wide)
+        isShared = false, -- New duplicated packs default to character-specific
         isFallback = false, -- New duplicated packs cannot be fallback (only one fallback allowed)
     }
     
@@ -133,12 +132,11 @@ function Mountie.DuplicatePack(sourceName, newName, newDescription)
         end
     end
     
-    -- Add duplicated pack to shared storage by default
-    if not MountieDB.sharedPacks then
-        MountieDB.sharedPacks = {}
-    end
-    table.insert(MountieDB.sharedPacks, duplicatedPack)
-    
+    -- Add duplicated pack to character-specific storage by default
+    local charPacks = Mountie.GetCharacterPacks()
+    table.insert(charPacks, duplicatedPack)
+    Mountie.SetCharacterPacks(charPacks)
+
     Mountie.VerbosePrint("Pack '" .. sourceName .. "' duplicated as '" .. newName .. "' (" .. #duplicatedPack.mounts .. " mounts, " .. #duplicatedPack.conditions .. " conditions)")
     return true, "Pack '" .. sourceName .. "' duplicated as '" .. newName .. "'"
 end
@@ -635,8 +633,85 @@ local function DoesRuleMatch(rule)
             return true, matchScore
         end
         return false, 0
+
+    elseif rule.type == "class" then
+        -- Use fallback priority if not in settings (for older databases)
+        if not priority or priority == 0 then
+            priority = 75
+        end
+
+        if not rule.classIDs or #rule.classIDs == 0 then
+            Mountie.Debug("Class rule has no classIDs")
+            return false, 0
+        end
+
+        local _, _, playerClassID = UnitClass("player")
+        Mountie.Debug("Player classID: " .. tostring(playerClassID) .. ", rule classIDs: " .. table.concat(rule.classIDs, ", "))
+        if not playerClassID then return false, 0 end
+
+        -- Check if player's class is in the list
+        local classMatches = false
+        for _, classID in ipairs(rule.classIDs) do
+            if classID == playerClassID then
+                classMatches = true
+                break
+            end
+        end
+
+        if not classMatches then
+            Mountie.Debug("Class rule: player class " .. playerClassID .. " not in rule classes")
+            return false, 0
+        end
+
+        -- If specIDs are specified, check if current spec matches
+        if rule.specIDs and #rule.specIDs > 0 then
+            local currentSpecIndex = GetSpecialization()
+            if not currentSpecIndex then return false, 0 end
+
+            local currentSpecID = GetSpecializationInfo(currentSpecIndex)
+            if not currentSpecID then return false, 0 end
+
+            Mountie.Debug("Player specID: " .. tostring(currentSpecID) .. ", rule specIDs: " .. table.concat(rule.specIDs, ", "))
+
+            for _, specID in ipairs(rule.specIDs) do
+                if specID == currentSpecID then
+                    Mountie.Debug("Class rule matched with spec!")
+                    return true, priority + 25 -- Spec match bonus
+                end
+            end
+            Mountie.Debug("Class rule: class matched but spec didn't")
+            return false, 0 -- Class matched but spec didn't
+        end
+
+        -- Class matched, no spec restriction
+        Mountie.Debug("Class rule matched (any spec)!")
+        return true, priority
+
+    elseif rule.type == "race" then
+        -- Use fallback priority if not in settings (for older databases)
+        if not priority or priority == 0 then
+            priority = 60
+        end
+
+        if not rule.raceIDs or #rule.raceIDs == 0 then
+            Mountie.Debug("Race rule has no raceIDs")
+            return false, 0
+        end
+
+        local _, _, playerRaceID = UnitRace("player")
+        Mountie.Debug("Player raceID: " .. tostring(playerRaceID) .. ", rule raceIDs: " .. table.concat(rule.raceIDs, ", "))
+        if not playerRaceID then return false, 0 end
+
+        for _, raceID in ipairs(rule.raceIDs) do
+            if raceID == playerRaceID then
+                Mountie.Debug("Race rule matched!")
+                return true, priority
+            end
+        end
+        Mountie.Debug("Race rule: player race " .. playerRaceID .. " not in rule races")
+        return false, 0
     end
-    
+
     return false, 0
 end
 
@@ -653,16 +728,27 @@ local function ScorePackAgainstContext(pack)
     local zoneRules = {}
     local transmogRules = {}
     local customTransmogRules = {}
-    
+    local classRules = {}
+    local raceRules = {}
+
     for i, rule in ipairs(pack.conditions) do
+        Mountie.Debug("Pack '" .. pack.name .. "' rule " .. i .. ": type=" .. tostring(rule.type))
         if rule.type == "zone" then
             table.insert(zoneRules, {rule = rule, index = i})
         elseif rule.type == "transmog" then
             table.insert(transmogRules, {rule = rule, index = i})
         elseif rule.type == "custom_transmog" then
             table.insert(customTransmogRules, {rule = rule, index = i})
+        elseif rule.type == "class" then
+            table.insert(classRules, {rule = rule, index = i})
+        elseif rule.type == "race" then
+            table.insert(raceRules, {rule = rule, index = i})
+        else
+            Mountie.Debug("Unknown rule type: " .. tostring(rule.type))
         end
     end
+
+    Mountie.Debug("Pack '" .. pack.name .. "' has " .. #classRules .. " class rules, " .. #raceRules .. " race rules")
     
     -- Zone rules: OR logic (any zone match qualifies)
     local zoneMatched = false
@@ -722,7 +808,53 @@ local function ScorePackAgainstContext(pack)
             end
         end
     end
-    
+
+    -- Class rules: OR logic (any class/spec rule match qualifies)
+    local classMatched = false
+    if #classRules > 0 then
+        for _, ruleData in ipairs(classRules) do
+            local matched, score = DoesRuleMatch(ruleData.rule)
+            if matched then
+                classMatched = true
+                totalScore = totalScore + score
+                table.insert(matchedRules, {
+                    type = ruleData.rule.type,
+                    score = score,
+                    index = ruleData.index
+                })
+            end
+        end
+
+        -- If we have class rules but none matched, pack doesn't qualify
+        if not classMatched then
+            return 0, {}
+        end
+    end
+
+    -- Race rules: OR logic (any race rule match qualifies)
+    local raceMatched = false
+    if #raceRules > 0 then
+        for _, ruleData in ipairs(raceRules) do
+            local matched, score = DoesRuleMatch(ruleData.rule)
+            if matched then
+                raceMatched = true
+                totalScore = totalScore + score
+                table.insert(matchedRules, {
+                    type = ruleData.rule.type,
+                    score = score,
+                    index = ruleData.index
+                })
+            end
+        end
+
+        -- If we have race rules but none matched, pack doesn't qualify
+        if not raceMatched then
+            Mountie.Debug("Pack '" .. pack.name .. "': race rules exist but none matched, returning 0")
+            return 0, {}
+        end
+    end
+
+    Mountie.Debug("Pack '" .. pack.name .. "': final score = " .. totalScore .. ", matched rules = " .. #matchedRules)
     return totalScore, matchedRules
 end
 
@@ -730,9 +862,12 @@ end
 local function GetMatchingPacks()
     local packs = Mountie.ListPacks()
     local matchingPacks = {}
-    
+
+    Mountie.Debug("GetMatchingPacks: checking " .. #packs .. " packs")
+
     for _, pack in ipairs(packs) do
         local score, matchedRules = ScorePackAgainstContext(pack)
+        Mountie.Debug("GetMatchingPacks: pack '" .. pack.name .. "' scored " .. score)
         if score > 0 then
             table.insert(matchingPacks, {
                 pack = pack,
@@ -761,20 +896,14 @@ function Mountie.SelectActivePack()
     end
     
     local selectedPacks = {}
-    local overlapMode = MountieDB.settings.packOverlapMode or "priority"
-    
-    if overlapMode == "priority" then
-        -- Use only the highest-scoring pack
-        selectedPacks = {matchingPacks[1]}
-        
-    elseif overlapMode == "intersection" then
+    local overlapMode = MountieDB.settings.packOverlapMode or "union"
+
+    if overlapMode == "intersection" then
         -- Use all matching packs (intersection will happen in mount selection)
         selectedPacks = matchingPacks
-        
-    elseif overlapMode == "union" then
-        -- Use all matching packs (union will happen in mount selection)
+    else
+        -- Union mode (default) - use all matching packs
         selectedPacks = matchingPacks
-        
     end
     
     -- Store the selection results
@@ -918,9 +1047,9 @@ local function GetRandomMountFromSelectedPacks()
     end
     
     -- Multiple packs - handle based on overlap mode
-    local overlapMode = MountieDB.settings.packOverlapMode or "priority"
+    local overlapMode = MountieDB.settings.packOverlapMode or "union"
     local combinedMounts = {}
-    
+
     if overlapMode == "intersection" then
         -- Find intersection - mounts that exist in ALL packs
         local firstPack = selectedPacks[1].pack
@@ -1059,7 +1188,15 @@ end
 
 function Mountie.MountActive()
     Mountie.Debug("MountActive called")
-    
+
+    -- If already mounted, dismount instead
+    if IsMounted() then
+        Mountie.Debug("Already mounted, dismounting")
+        Dismount()
+        Mountie.VerbosePrint("Dismounting")
+        return true
+    end
+
     local mountID = GetRandomMountFromSelectedPacks()
     local source = "rule-based packs"
     local packInfo = ""  -- this gets set later
@@ -1068,11 +1205,9 @@ function Mountie.MountActive()
         -- We got a mount from rule-based selection
         local selectedPacks = Mountie.runtime.selectedPacks or {}
         if #selectedPacks > 1 then
-            local overlapMode = MountieDB.settings.packOverlapMode or "priority"
+            local overlapMode = MountieDB.settings.packOverlapMode or "union"
             if overlapMode == "intersection" then
                 packInfo = " from intersection of " .. #selectedPacks .. " packs"
-            elseif overlapMode == "union" then
-                packInfo = " from union of " .. #selectedPacks .. " packs"
             else
                 packInfo = " from " .. #selectedPacks .. " packs"
             end
@@ -1100,7 +1235,7 @@ function Mountie.MountActive()
     -- Summon the selected mount
     local name = C_MountJournal.GetMountInfoByID(mountID)
     Mountie.Debug("Summoning mount: " .. (name or "Unknown") .. packInfo)
-    Mountie.VerbosePrint("Summoned " .. (name or "Unknown") .. packInfo)
+    Mountie.VerbosePrint("Summoning " .. (name or "Unknown"))
     C_MountJournal.SummonByID(mountID)
     return true
 end
@@ -1243,11 +1378,6 @@ local function SlashHandler(msg)
         MountieDB.settings.preferFlyingMounts = false
         Mountie.Print("Flying mount preference: OFF")
 
-    elseif command == "overlap-priority" then
-        MountieDB.settings.packOverlapMode = "priority"
-        Mountie.Print("Pack overlap mode: Priority (highest scoring pack only)")
-        C_Timer.After(0.1, Mountie.SelectActivePack)
-
     elseif command == "overlap-intersection" then
         MountieDB.settings.packOverlapMode = "intersection"
         Mountie.Print("Pack overlap mode: Intersection (mounts common to all matching packs)")
@@ -1282,17 +1412,15 @@ local function SlashHandler(msg)
                 Mountie.Print("  " .. i .. ". " .. packData.pack.name .. " (score: " .. packData.score .. ", rules: " .. table.concat(ruleTypes, ", ") .. ")")
             end
             
-            local overlapMode = MountieDB.settings.packOverlapMode or "priority"
+            local overlapMode = MountieDB.settings.packOverlapMode or "union"
             local selectedPacks = Mountie.runtime.selectedPacks or {}
-            
-            if overlapMode == "priority" and #selectedPacks > 0 then
-                Mountie.Print("Active pack (priority mode): " .. selectedPacks[1].pack.name)
-            elseif overlapMode == "intersection" and #selectedPacks > 1 then
+
+            if #selectedPacks > 0 then
                 local packNames = {}
                 for _, sp in ipairs(selectedPacks) do
                     table.insert(packNames, sp.pack.name)
                 end
-                local modeText = overlapMode == "union" and "union mode" or "intersection mode"
+                local modeText = overlapMode == "intersection" and "intersection" or "union"
                 Mountie.Print("Active packs (" .. modeText .. "): " .. table.concat(packNames, ", "))
             end
         end
@@ -1332,7 +1460,7 @@ local function SlashHandler(msg)
         Mountie.Print("- Verbose mode: " .. (MountieDB.settings.verboseMode and "ON" or "OFF"))
         Mountie.Print("- Debug mode: " .. (MountieDB.settings.debugMode and "ON" or "OFF"))
         Mountie.Print("- Flying preference: " .. (MountieDB.settings.preferFlyingMounts and "ON" or "OFF"))
-        Mountie.Print("- Overlap mode: " .. (MountieDB.settings.packOverlapMode or "priority"))
+        Mountie.Print("- Overlap mode: " .. (MountieDB.settings.packOverlapMode or "union"))
         Mountie.Print("- Active pack: " .. (Mountie.runtime.activePackName or "None"))
         local fallbackPack = Mountie.GetFallbackPack()
         Mountie.Print("- Fallback pack: " .. (fallbackPack and fallbackPack.name or "None"))
@@ -1579,6 +1707,46 @@ local function SlashHandler(msg)
             Mountie.Print("No valid map ID detected")
         end
         
+    elseif command == "debug-pack" then
+        local packName = args[2]
+        if not packName then
+            Mountie.Print("Usage: /mountie debug-pack <pack_name>")
+            return
+        end
+
+        local pack = Mountie.GetPackByName(packName)
+        if not pack then
+            Mountie.Print("Pack '" .. packName .. "' not found")
+            return
+        end
+
+        Mountie.Print("Pack '" .. packName .. "' debug info:")
+        Mountie.Print("- isShared: " .. tostring(pack.isShared))
+        Mountie.Print("- isFallback: " .. tostring(pack.isFallback))
+        Mountie.Print("- Mounts: " .. #(pack.mounts or {}))
+        Mountie.Print("- Conditions: " .. #(pack.conditions or {}))
+
+        if pack.conditions then
+            for i, rule in ipairs(pack.conditions) do
+                Mountie.Print("  Rule " .. i .. ":")
+                Mountie.Print("    type: " .. tostring(rule.type))
+                if rule.type == "class" then
+                    Mountie.Print("    classIDs: " .. (rule.classIDs and table.concat(rule.classIDs, ", ") or "nil"))
+                    Mountie.Print("    specIDs: " .. (rule.specIDs and table.concat(rule.specIDs, ", ") or "nil"))
+                elseif rule.type == "race" then
+                    Mountie.Print("    raceIDs: " .. (rule.raceIDs and table.concat(rule.raceIDs, ", ") or "nil"))
+                elseif rule.type == "zone" then
+                    Mountie.Print("    mapID: " .. tostring(rule.mapID))
+                end
+            end
+        end
+
+        -- Also show current player info
+        local _, _, playerClassID = UnitClass("player")
+        local _, _, playerRaceID = UnitRace("player")
+        Mountie.Print("Your classID: " .. tostring(playerClassID))
+        Mountie.Print("Your raceID: " .. tostring(playerRaceID))
+
     elseif command == "update-transmog" then
         Mountie.Print("Manually re-evaluating transmog rules...")
         
@@ -1903,7 +2071,7 @@ local function SlashHandler(msg)
         Mountie.Print("/mountie apply-transmog <set_id> - Apply transmog set by ID (must be at vendor)")
         Mountie.Print("/mountie debug-transmog - Show transmog system debug information")
         Mountie.Print("/mountie debug-zone - Show detailed zone detection information")
-        Mountie.Print("/mountie overlap-priority/intersection - Set overlap mode")
+        Mountie.Print("/mountie overlap-intersection/union - Set pack overlap mode")
         Mountie.Print("/mountie flying-on/off - Toggle flying mount preference")
         Mountie.Print("/mountie verbose-on/off - Toggle verbose output")
         

@@ -143,7 +143,8 @@ local function RebuildRulesList(container, pack)
     for i, rule in ipairs(pack.conditions) do
         local row = CreateFrame("Frame", nil, container)
         -- Increase height for custom transmog rules that have two lines of text
-        local rowHeight = (rule.type == "custom_transmog") and 35 or 22
+        local isTwoLineRule = (rule.type == "custom_transmog") or (rule.type == "class" and rule.specIDs and #rule.specIDs > 0)
+        local rowHeight = isTwoLineRule and 35 or 22
         row:SetSize(360, rowHeight)
         row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, y)
 
@@ -198,6 +199,39 @@ local function RebuildRulesList(container, pack)
             local strictness = rule.strictness or 6
             local weaponsText = rule.includeWeapons and " +Weapons" or ""
             text:SetText(string.format("Custom Transmog: %s\n(Strictness: %d%s)", transmogName, strictness, weaponsText))
+        elseif rule.type == "class" then
+            local classNames = {}
+            for _, classID in ipairs(rule.classIDs or {}) do
+                local className = GetClassInfo(classID)
+                if className then
+                    table.insert(classNames, className)
+                end
+            end
+            local classText = #classNames > 0 and table.concat(classNames, ", ") or "None"
+
+            if rule.specIDs and #rule.specIDs > 0 then
+                local specNames = {}
+                for _, specID in ipairs(rule.specIDs) do
+                    local _, specName = GetSpecializationInfoByID(specID)
+                    if specName then
+                        table.insert(specNames, specName)
+                    end
+                end
+                local specText = #specNames > 0 and table.concat(specNames, ", ") or "Any"
+                text:SetText(string.format("Class: %s\n(Specs: %s)", classText, specText))
+            else
+                text:SetText("Class: " .. classText .. " (Any spec)")
+            end
+        elseif rule.type == "race" then
+            local raceNames = {}
+            for _, raceID in ipairs(rule.raceIDs or {}) do
+                local raceInfo = C_CreatureInfo.GetRaceInfo(raceID)
+                if raceInfo then
+                    table.insert(raceNames, raceInfo.raceName)
+                end
+            end
+            local raceText = #raceNames > 0 and table.concat(raceNames, ", ") or "None"
+            text:SetText("Race: " .. raceText)
         else
             text:SetText("Unknown rule type")
         end
@@ -337,7 +371,8 @@ local function RebuildRulesList(container, pack)
     -- Update content height and manage scrollbar visibility
     local totalHeight = 20 -- Base padding
     for _, rule in ipairs(pack.conditions) do
-        local ruleHeight = (rule.type == "custom_transmog") and 37 or 26 -- Row height + spacing
+        local isTwoLine = (rule.type == "custom_transmog") or (rule.type == "class" and rule.specIDs and #rule.specIDs > 0)
+        local ruleHeight = isTwoLine and 37 or 26 -- Row height + spacing
         totalHeight = totalHeight + ruleHeight
     end
     local contentHeight = math.max(totalHeight, 1)
@@ -383,7 +418,7 @@ function MountieUI.ShowRulesDialog(pack)
     if not rulesDialog then
         Mountie.Debug("Creating new rules dialog")
         local dlg = CreateFrame("Frame", "MountieRulesDialog", UIParent, "BasicFrameTemplateWithInset")
-        dlg:SetSize(420, 400) -- Increased height for transmog controls
+        dlg:SetSize(420, 480) -- Increased height for transmog and class/race controls
         dlg:SetPoint("CENTER")
         dlg:SetMovable(true)
         dlg:EnableMouse(true)
@@ -672,9 +707,40 @@ function MountieUI.ShowRulesDialog(pack)
             inputDialog:Show()
         end)
 
+        -- Class/Race rule buttons row
+        local classRaceLabel = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        classRaceLabel:SetPoint("TOPLEFT", addTransmogBtn, "BOTTOMLEFT", 0, -20)
+        classRaceLabel:SetText("Character Rules:")
+
+        local addClassBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
+        addClassBtn:SetSize(130, 22)
+        addClassBtn:SetPoint("TOPLEFT", classRaceLabel, "BOTTOMLEFT", 0, -10)
+        addClassBtn:SetText("Add Class/Spec")
+        addClassBtn:SetScript("OnClick", function()
+            if dlg.classPicker then
+                dlg.classPicker:Show()
+            else
+                dlg.classPicker = MountieUI.CreateClassPicker(dlg)
+                dlg.classPicker:Show()
+            end
+        end)
+
+        local addRaceBtn = CreateFrame("Button", nil, dlg, "UIPanelButtonTemplate")
+        addRaceBtn:SetSize(100, 22)
+        addRaceBtn:SetPoint("LEFT", addClassBtn, "RIGHT", 10, 0)
+        addRaceBtn:SetText("Add Race")
+        addRaceBtn:SetScript("OnClick", function()
+            if dlg.racePicker then
+                dlg.racePicker:Show()
+            else
+                dlg.racePicker = MountieUI.CreateRacePicker(dlg)
+                dlg.racePicker:Show()
+            end
+        end)
+
         -- Rules list container (moved down with proper spacing)
         local listLabel = dlg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        listLabel:SetPoint("TOPLEFT", addTransmogBtn, "BOTTOMLEFT", 0, -20)
+        listLabel:SetPoint("TOPLEFT", addClassBtn, "BOTTOMLEFT", 0, -20)
         listLabel:SetText("Rules for this pack:")
 
         local rulesScroll = CreateFrame("ScrollFrame", nil, dlg, "UIPanelScrollFrameTemplate")
@@ -1674,6 +1740,533 @@ function MountieUI.CreateTransmogPicker(parentDialog)
 
     picker:Hide()
     table.insert(UISpecialFrames, "MountieTransmogPicker")
+    return picker
+end
+
+-- Class/Spec Picker Dialog
+function MountieUI.CreateClassPicker(parentDialog)
+    local picker = CreateFrame("Frame", "MountieClassPicker", UIParent, "BasicFrameTemplateWithInset")
+    picker:SetSize(450, 500)
+    picker:SetPoint("CENTER", parentDialog, "CENTER", 50, 0)
+    picker:SetMovable(true)
+    picker:EnableMouse(true)
+    picker:RegisterForDrag("LeftButton")
+    picker:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    picker:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    picker:SetFrameStrata("FULLSCREEN_DIALOG")
+    picker:SetFrameLevel(parentDialog:GetFrameLevel() + 1)
+
+    picker.TitleText:SetText("Select Classes & Specializations")
+
+    picker.CloseButton:SetScript("OnClick", function()
+        picker:Hide()
+    end)
+
+    -- Instructions
+    local instructionText = picker:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    instructionText:SetPoint("TOPLEFT", picker, "TOPLEFT", 20, -40)
+    instructionText:SetText("Select classes. Click [+] to choose specific specs (optional).")
+    instructionText:SetTextColor(0.8, 0.8, 0.8, 1)
+
+    -- Scroll frame for class list
+    local classScroll = CreateFrame("ScrollFrame", nil, picker, "UIPanelScrollFrameTemplate")
+    classScroll:SetPoint("TOPLEFT", instructionText, "BOTTOMLEFT", 0, -10)
+    classScroll:SetPoint("BOTTOMRIGHT", picker, "BOTTOMRIGHT", -50, 50)
+
+    local classContent = CreateFrame("Frame", nil, classScroll)
+    classContent:SetSize(380, 1)
+    classScroll:SetScrollChild(classContent)
+
+    -- Add Rule button
+    local addBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
+    addBtn:SetSize(80, 25)
+    addBtn:SetPoint("BOTTOMRIGHT", picker, "BOTTOMRIGHT", -20, 20)
+    addBtn:SetText("Add Rule")
+    addBtn:SetEnabled(false)
+
+    -- Cancel button
+    local cancelBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
+    cancelBtn:SetSize(80, 25)
+    cancelBtn:SetPoint("RIGHT", addBtn, "LEFT", -10, 0)
+    cancelBtn:SetText("Cancel")
+    cancelBtn:SetScript("OnClick", function() picker:Hide() end)
+
+    -- Store state
+    picker.selectedClasses = {} -- { [classID] = true }
+    picker.selectedSpecs = {}   -- { [specID] = true }
+    picker.expandedClasses = {} -- { [classID] = true }
+    picker.classRows = {}
+
+    -- Class data (all playable classes with their IDs)
+    local classData = {}
+    for classID = 1, 13 do -- WoW class IDs 1-13 (skipping 14 which doesn't exist)
+        local className, classToken = GetClassInfo(classID)
+        if className then
+            local specs = {}
+            for specIndex = 1, GetNumSpecializationsForClassID(classID) do
+                local specID, specName = GetSpecializationInfoForClassID(classID, specIndex)
+                if specID and specName then
+                    table.insert(specs, {specID = specID, name = specName})
+                end
+            end
+            table.insert(classData, {
+                classID = classID,
+                name = className,
+                token = classToken,
+                specs = specs
+            })
+        end
+    end
+
+    -- Sort by class name
+    table.sort(classData, function(a, b) return a.name < b.name end)
+
+    -- Function to populate class list
+    local function PopulateClassList()
+        -- Clear existing rows
+        for _, row in ipairs(picker.classRows) do
+            row:Hide()
+            row:SetParent(nil)
+        end
+        picker.classRows = {}
+
+        local y = -5
+        for _, classInfo in ipairs(classData) do
+            -- Class row
+            local classRow = CreateFrame("Frame", nil, classContent, "BackdropTemplate")
+            classRow:SetSize(360, 28)
+            classRow:SetPoint("TOPLEFT", classContent, "TOPLEFT", 0, y)
+            classRow:SetBackdrop({
+                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                tile = true, tileSize = 16, edgeSize = 8,
+                insets = { left = 2, right = 2, top = 2, bottom = 2 }
+            })
+            classRow:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+            classRow:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
+
+            -- Class checkbox
+            local classCheck = CreateFrame("CheckButton", nil, classRow, "UICheckButtonTemplate")
+            classCheck:SetSize(20, 20)
+            classCheck:SetPoint("LEFT", classRow, "LEFT", 5, 0)
+            classCheck:SetChecked(picker.selectedClasses[classInfo.classID] or false)
+
+            -- Expand button for specs
+            local expandBtn = CreateFrame("Button", nil, classRow)
+            expandBtn:SetSize(16, 16)
+            expandBtn:SetPoint("LEFT", classCheck, "RIGHT", 2, 0)
+
+            local expandTexture = expandBtn:CreateTexture(nil, "OVERLAY")
+            expandTexture:SetAllPoints()
+            if picker.expandedClasses[classInfo.classID] then
+                expandTexture:SetTexture("Interface\\Buttons\\UI-MinusButton-Up")
+            else
+                expandTexture:SetTexture("Interface\\Buttons\\UI-PlusButton-Up")
+            end
+            expandBtn.texture = expandTexture
+
+            -- Class name with class color
+            local classColor = RAID_CLASS_COLORS[classInfo.token] or {r=1, g=1, b=1}
+            local classText = classRow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            classText:SetPoint("LEFT", expandBtn, "RIGHT", 5, 0)
+            classText:SetText(classInfo.name)
+            classText:SetTextColor(classColor.r, classColor.g, classColor.b, 1)
+
+            -- Checkbox handler
+            classCheck:SetScript("OnClick", function(self)
+                picker.selectedClasses[classInfo.classID] = self:GetChecked() or nil
+                -- If unchecking, also clear spec selections for this class
+                if not self:GetChecked() then
+                    for _, spec in ipairs(classInfo.specs) do
+                        picker.selectedSpecs[spec.specID] = nil
+                    end
+                end
+                -- Update add button state
+                local hasSelection = false
+                for _ in pairs(picker.selectedClasses) do
+                    hasSelection = true
+                    break
+                end
+                addBtn:SetEnabled(hasSelection)
+                PopulateClassList() -- Refresh to update spec display
+            end)
+
+            -- Expand button handler
+            expandBtn:SetScript("OnClick", function()
+                picker.expandedClasses[classInfo.classID] = not picker.expandedClasses[classInfo.classID]
+                PopulateClassList()
+            end)
+
+            table.insert(picker.classRows, classRow)
+            y = y - 30
+
+            -- Show specs if expanded
+            if picker.expandedClasses[classInfo.classID] then
+                for _, spec in ipairs(classInfo.specs) do
+                    local specRow = CreateFrame("Frame", nil, classContent, "BackdropTemplate")
+                    specRow:SetSize(340, 24)
+                    specRow:SetPoint("TOPLEFT", classContent, "TOPLEFT", 20, y)
+                    specRow:SetBackdrop({
+                        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                        tile = true, tileSize = 16,
+                        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+                    })
+                    specRow:SetBackdropColor(0.15, 0.15, 0.15, 0.6)
+
+                    -- Spec checkbox
+                    local specCheck = CreateFrame("CheckButton", nil, specRow, "UICheckButtonTemplate")
+                    specCheck:SetSize(18, 18)
+                    specCheck:SetPoint("LEFT", specRow, "LEFT", 5, 0)
+                    specCheck:SetChecked(picker.selectedSpecs[spec.specID] or false)
+
+                    -- Spec name
+                    local specText = specRow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    specText:SetPoint("LEFT", specCheck, "RIGHT", 5, 0)
+                    specText:SetText(spec.name)
+                    specText:SetTextColor(0.9, 0.9, 0.9, 1)
+
+                    -- Spec checkbox handler
+                    specCheck:SetScript("OnClick", function(self)
+                        picker.selectedSpecs[spec.specID] = self:GetChecked() or nil
+                        -- If selecting a spec, ensure the class is also selected
+                        if self:GetChecked() then
+                            picker.selectedClasses[classInfo.classID] = true
+                            addBtn:SetEnabled(true)
+                            PopulateClassList() -- Refresh to update class checkbox
+                        end
+                    end)
+
+                    table.insert(picker.classRows, specRow)
+                    y = y - 26
+                end
+            end
+        end
+
+        -- Update content height
+        local contentHeight = math.max(-y + 10, 1)
+        classContent:SetHeight(contentHeight)
+
+        -- Manage scrollbar
+        if classScroll.ScrollBar then
+            if contentHeight > classScroll:GetHeight() then
+                classScroll.ScrollBar:Show()
+            else
+                classScroll.ScrollBar:Hide()
+                classScroll:SetVerticalScroll(0)
+            end
+        end
+    end
+
+    -- Add button functionality
+    addBtn:SetScript("OnClick", function()
+        if not parentDialog.targetPack then return end
+
+        -- Build classIDs and specIDs arrays
+        local classIDs = {}
+        local specIDs = {}
+
+        for classID in pairs(picker.selectedClasses) do
+            table.insert(classIDs, classID)
+        end
+        for specID in pairs(picker.selectedSpecs) do
+            table.insert(specIDs, specID)
+        end
+
+        if #classIDs == 0 then
+            Mountie.Print("Please select at least one class.")
+            return
+        end
+
+        -- Add the rule
+        EnsureConditions(parentDialog.targetPack)
+        table.insert(parentDialog.targetPack.conditions, {
+            type = "class",
+            classIDs = classIDs,
+            specIDs = #specIDs > 0 and specIDs or nil,
+        })
+
+        -- Build description for message
+        local classNames = {}
+        for _, classID in ipairs(classIDs) do
+            local className = GetClassInfo(classID)
+            if className then
+                table.insert(classNames, className)
+            end
+        end
+
+        if #specIDs > 0 then
+            local specNames = {}
+            for _, specID in ipairs(specIDs) do
+                local _, specName = GetSpecializationInfoByID(specID)
+                if specName then
+                    table.insert(specNames, specName)
+                end
+            end
+            Mountie.VerbosePrint("Added class rule: " .. table.concat(classNames, ", ") .. " (Specs: " .. table.concat(specNames, ", ") .. ")")
+        else
+            Mountie.VerbosePrint("Added class rule: " .. table.concat(classNames, ", ") .. " (Any spec)")
+        end
+
+        RebuildRulesList(parentDialog.rulesList, parentDialog.targetPack)
+        C_Timer.After(0.1, Mountie.SelectActivePack)
+
+        -- Refresh pack panel
+        if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+            _G.MountieMainFrame.packPanel.refreshPacks()
+        end
+
+        picker:Hide()
+    end)
+
+    -- OnShow: reset state and populate list
+    picker:SetScript("OnShow", function(self)
+        self.selectedClasses = {}
+        self.selectedSpecs = {}
+        self.expandedClasses = {}
+        addBtn:SetEnabled(false)
+        PopulateClassList()
+    end)
+
+    picker:Hide()
+    table.insert(UISpecialFrames, "MountieClassPicker")
+    return picker
+end
+
+-- Race Picker Dialog
+function MountieUI.CreateRacePicker(parentDialog)
+    local picker = CreateFrame("Frame", "MountieRacePicker", UIParent, "BasicFrameTemplateWithInset")
+    picker:SetSize(400, 450)
+    picker:SetPoint("CENTER", parentDialog, "CENTER", 50, 0)
+    picker:SetMovable(true)
+    picker:EnableMouse(true)
+    picker:RegisterForDrag("LeftButton")
+    picker:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    picker:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    picker:SetFrameStrata("FULLSCREEN_DIALOG")
+    picker:SetFrameLevel(parentDialog:GetFrameLevel() + 1)
+
+    picker.TitleText:SetText("Select Races")
+
+    picker.CloseButton:SetScript("OnClick", function()
+        picker:Hide()
+    end)
+
+    -- Instructions
+    local instructionText = picker:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    instructionText:SetPoint("TOPLEFT", picker, "TOPLEFT", 20, -40)
+    instructionText:SetText("Select one or more races for this rule.")
+    instructionText:SetTextColor(0.8, 0.8, 0.8, 1)
+
+    -- Scroll frame for race list
+    local raceScroll = CreateFrame("ScrollFrame", nil, picker, "UIPanelScrollFrameTemplate")
+    raceScroll:SetPoint("TOPLEFT", instructionText, "BOTTOMLEFT", 0, -10)
+    raceScroll:SetPoint("BOTTOMRIGHT", picker, "BOTTOMRIGHT", -50, 50)
+
+    local raceContent = CreateFrame("Frame", nil, raceScroll)
+    raceContent:SetSize(330, 1)
+    raceScroll:SetScrollChild(raceContent)
+
+    -- Add Rule button
+    local addBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
+    addBtn:SetSize(80, 25)
+    addBtn:SetPoint("BOTTOMRIGHT", picker, "BOTTOMRIGHT", -20, 20)
+    addBtn:SetText("Add Rule")
+    addBtn:SetEnabled(false)
+
+    -- Cancel button
+    local cancelBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
+    cancelBtn:SetSize(80, 25)
+    cancelBtn:SetPoint("RIGHT", addBtn, "LEFT", -10, 0)
+    cancelBtn:SetText("Cancel")
+    cancelBtn:SetScript("OnClick", function() picker:Hide() end)
+
+    -- Store state
+    picker.selectedRaces = {} -- { [raceID] = true }
+    picker.raceRows = {}
+
+    -- Get all playable races
+    local raceData = {}
+
+    -- Alliance races
+    local allianceRaces = {1, 3, 4, 7, 11, 22, 25, 29, 30, 32, 34, 37} -- Human, Dwarf, Night Elf, Gnome, Draenei, Worgen, Pandaren (Alliance), Void Elf, Lightforged, Kul Tiran, Dark Iron, Mechagnome
+    -- Horde races
+    local hordeRaces = {2, 5, 6, 8, 9, 10, 26, 27, 28, 31, 35, 36} -- Orc, Undead, Tauren, Troll, Goblin, Blood Elf, Pandaren (Horde), Nightborne, Highmountain, Zandalari, Mag'har, Vulpera
+    -- Neutral races (Dracthyr, Earthen)
+    local neutralRaces = {52, 70, 84, 85} -- Dracthyr Alliance, Dracthyr Horde, Earthen Alliance, Earthen Horde
+
+    local function addRacesFromList(raceList, faction)
+        for _, raceID in ipairs(raceList) do
+            local raceInfo = C_CreatureInfo.GetRaceInfo(raceID)
+            if raceInfo then
+                table.insert(raceData, {
+                    raceID = raceID,
+                    name = raceInfo.raceName,
+                    faction = faction
+                })
+            end
+        end
+    end
+
+    addRacesFromList(allianceRaces, "Alliance")
+    addRacesFromList(hordeRaces, "Horde")
+    addRacesFromList(neutralRaces, "Neutral")
+
+    -- Sort by faction then name
+    table.sort(raceData, function(a, b)
+        if a.faction ~= b.faction then
+            local order = {Alliance = 1, Horde = 2, Neutral = 3}
+            return (order[a.faction] or 4) < (order[b.faction] or 4)
+        end
+        return a.name < b.name
+    end)
+
+    -- Function to populate race list
+    local function PopulateRaceList()
+        -- Clear existing rows
+        for _, row in ipairs(picker.raceRows) do
+            row:Hide()
+            row:SetParent(nil)
+        end
+        picker.raceRows = {}
+
+        local y = -5
+        local currentFaction = nil
+
+        for _, raceInfo in ipairs(raceData) do
+            -- Add faction header if changed
+            if raceInfo.faction ~= currentFaction then
+                currentFaction = raceInfo.faction
+
+                local headerRow = CreateFrame("Frame", nil, raceContent)
+                headerRow:SetSize(330, 22)
+                headerRow:SetPoint("TOPLEFT", raceContent, "TOPLEFT", 0, y)
+
+                local headerText = headerRow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                headerText:SetPoint("LEFT", headerRow, "LEFT", 5, 0)
+                headerText:SetText(currentFaction)
+
+                -- Faction color
+                if currentFaction == "Alliance" then
+                    headerText:SetTextColor(0.4, 0.6, 1, 1)
+                elseif currentFaction == "Horde" then
+                    headerText:SetTextColor(1, 0.4, 0.4, 1)
+                else
+                    headerText:SetTextColor(0.8, 0.8, 0.4, 1)
+                end
+
+                table.insert(picker.raceRows, headerRow)
+                y = y - 24
+            end
+
+            -- Race row
+            local raceRow = CreateFrame("Frame", nil, raceContent, "BackdropTemplate")
+            raceRow:SetSize(320, 26)
+            raceRow:SetPoint("TOPLEFT", raceContent, "TOPLEFT", 10, y)
+            raceRow:SetBackdrop({
+                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                tile = true, tileSize = 16, edgeSize = 8,
+                insets = { left = 2, right = 2, top = 2, bottom = 2 }
+            })
+            raceRow:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+            raceRow:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
+
+            -- Race checkbox
+            local raceCheck = CreateFrame("CheckButton", nil, raceRow, "UICheckButtonTemplate")
+            raceCheck:SetSize(20, 20)
+            raceCheck:SetPoint("LEFT", raceRow, "LEFT", 5, 0)
+            raceCheck:SetChecked(picker.selectedRaces[raceInfo.raceID] or false)
+
+            -- Race name
+            local raceText = raceRow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            raceText:SetPoint("LEFT", raceCheck, "RIGHT", 5, 0)
+            raceText:SetText(raceInfo.name)
+            raceText:SetTextColor(1, 1, 1, 1)
+
+            -- Checkbox handler
+            raceCheck:SetScript("OnClick", function(self)
+                picker.selectedRaces[raceInfo.raceID] = self:GetChecked() or nil
+                -- Update add button state
+                local hasSelection = false
+                for _ in pairs(picker.selectedRaces) do
+                    hasSelection = true
+                    break
+                end
+                addBtn:SetEnabled(hasSelection)
+            end)
+
+            table.insert(picker.raceRows, raceRow)
+            y = y - 28
+        end
+
+        -- Update content height
+        local contentHeight = math.max(-y + 10, 1)
+        raceContent:SetHeight(contentHeight)
+
+        -- Manage scrollbar
+        if raceScroll.ScrollBar then
+            if contentHeight > raceScroll:GetHeight() then
+                raceScroll.ScrollBar:Show()
+            else
+                raceScroll.ScrollBar:Hide()
+                raceScroll:SetVerticalScroll(0)
+            end
+        end
+    end
+
+    -- Add button functionality
+    addBtn:SetScript("OnClick", function()
+        if not parentDialog.targetPack then return end
+
+        -- Build raceIDs array
+        local raceIDs = {}
+        for raceID in pairs(picker.selectedRaces) do
+            table.insert(raceIDs, raceID)
+        end
+
+        if #raceIDs == 0 then
+            Mountie.Print("Please select at least one race.")
+            return
+        end
+
+        -- Add the rule
+        EnsureConditions(parentDialog.targetPack)
+        table.insert(parentDialog.targetPack.conditions, {
+            type = "race",
+            raceIDs = raceIDs,
+        })
+
+        -- Build description for message
+        local raceNames = {}
+        for _, raceID in ipairs(raceIDs) do
+            local raceInfo = C_CreatureInfo.GetRaceInfo(raceID)
+            if raceInfo then
+                table.insert(raceNames, raceInfo.raceName)
+            end
+        end
+
+        Mountie.VerbosePrint("Added race rule: " .. table.concat(raceNames, ", "))
+
+        RebuildRulesList(parentDialog.rulesList, parentDialog.targetPack)
+        C_Timer.After(0.1, Mountie.SelectActivePack)
+
+        -- Refresh pack panel
+        if _G.MountieMainFrame and _G.MountieMainFrame.packPanel and _G.MountieMainFrame.packPanel.refreshPacks then
+            _G.MountieMainFrame.packPanel.refreshPacks()
+        end
+
+        picker:Hide()
+    end)
+
+    -- OnShow: reset state and populate list
+    picker:SetScript("OnShow", function(self)
+        self.selectedRaces = {}
+        addBtn:SetEnabled(false)
+        PopulateRaceList()
+    end)
+
+    picker:Hide()
+    table.insert(UISpecialFrames, "MountieRacePicker")
     return picker
 end
 

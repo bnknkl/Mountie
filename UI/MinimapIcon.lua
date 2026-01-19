@@ -55,15 +55,8 @@ local function UpdateTooltip(button)
         GameTooltip:AddLine("Active: " .. table.concat(packNames, ", "), 0.8, 1, 0.8)
     end
     
-    local overlapMode = MountieDB.settings.packOverlapMode or "priority"
-    local modeText = ""
-    if overlapMode == "priority" then
-        modeText = "Priority mode"
-    elseif overlapMode == "intersection" then
-        modeText = "Intersection mode"
-    elseif overlapMode == "union" then
-        modeText = "Union mode"
-    end
+    local overlapMode = MountieDB.settings.packOverlapMode or "union"
+    local modeText = overlapMode == "intersection" and "Intersection" or "Union"
     GameTooltip:AddLine("Mode: " .. modeText, 1, 1, 0.8)
     
     local flyingPref = MountieDB.settings.preferFlyingMounts and "Yes" or "No"

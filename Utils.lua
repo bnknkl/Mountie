@@ -59,11 +59,13 @@ if not MountieDB.settings then
         debugMode = false,
         verboseMode = false,
         preferFlyingMounts = true,
-        packOverlapMode = "priority",
+        packOverlapMode = "union",
         minimapIconAngle = 220, -- Default position angle in degrees
         rulePriorities = {
             transmog = 100,
             zone = 50,
+            class = 75,
+            race = 60,
         }
     }
 end
@@ -71,6 +73,16 @@ end
 -- Ensure minimapIconAngle exists in existing databases
 if MountieDB.settings.minimapIconAngle == nil then
     MountieDB.settings.minimapIconAngle = 220
+end
+
+-- Ensure rulePriorities has class and race entries (for databases created before these were added)
+if MountieDB.settings.rulePriorities then
+    if MountieDB.settings.rulePriorities.class == nil then
+        MountieDB.settings.rulePriorities.class = 75
+    end
+    if MountieDB.settings.rulePriorities.race == nil then
+        MountieDB.settings.rulePriorities.race = 60
+    end
 end
 
 -- Initialize character-specific data
