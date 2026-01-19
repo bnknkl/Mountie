@@ -1,0 +1,18 @@
+## Interface: 110200, 110205
+## Title: Mountie
+## Notes: Create and manage mount sets for different zones, expansions, and transmogs
+## Author: Khazryl
+## Version: 0.8
+## IconTexture: Interface\Icons\Ability_Mount_RidingHorse
+## SavedVariables: MountieDB
+## Bindings: Bindings.xml
+
+Utils.lua
+Core.lua
+UI/Dialogs.lua
+UI/MountList.lua
+UI/MainFrame.lua
+UI/PackPanel.lua
+UI/RulesDialog.lua
+UI/MountJournalHook.lua
+UI/MinimapIcon.lua
